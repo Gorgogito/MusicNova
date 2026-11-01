@@ -1,0 +1,17 @@
+# Rust
+target/
+
+# Frontend
+app/node_modules/
+app/dist/
+app/src-tauri/gen/
+
+# Python
+ai-worker/.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Sistema
+.DS_Store
+Thumbs.db
