@@ -78,6 +78,35 @@ export interface Section {
   label: string
 }
 
+export interface LyricWord {
+  start: number
+  end: number
+  text: string
+  prob: number
+}
+
+export interface LyricLine {
+  start: number
+  end: number
+  text: string
+  words: LyricWord[]
+}
+
+export interface Lyrics {
+  version: number
+  language: string
+  language_probability: number
+  model_id: string
+  source: 'vocals' | 'mix'
+  duration: number
+  lines: LyricLine[]
+  seconds: number
+  device: string
+  warning: string | null
+}
+
+export type LyricsFormat = 'lrc' | 'lrc_words' | 'srt' | 'txt'
+
 export interface Analysis {
   version: number
   duration: number
@@ -113,6 +142,7 @@ export interface ProjectView {
   tracks: TrackView[]
   sample_rate: number
   analysis: Analysis | null
+  lyrics: Lyrics | null
 }
 
 export interface ProjectSummary {
@@ -242,6 +272,11 @@ export const api = {
     invoke<{ job_id: string }>('analyze_start', { device, beatModelId }),
   analysisApply: () => invoke<{ analysis: Analysis; practice: PracticeSettings }>('analysis_apply'),
   analysisUpdate: (analysis: Analysis) => invoke<Analysis>('analysis_update', { analysis }),
+  lyricsStart: (modelId?: string, language?: string, device?: string) =>
+    invoke<{ job_id: string }>('lyrics_start', { modelId, language, device }),
+  lyricsApply: () => invoke<Lyrics>('lyrics_apply'),
+  lyricsUpdate: (lyrics: Lyrics) => invoke<Lyrics>('lyrics_update', { lyrics }),
+  lyricsExport: (path: string, format: LyricsFormat) => invoke<string>('lyrics_export', { path, format }),
 }
 
 export const events = {

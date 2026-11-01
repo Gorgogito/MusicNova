@@ -1,0 +1,34 @@
+id = "whisper_small"
+name = "Whisper small · Letras (ligero)"
+task = "lyrics"
+family = "faster_whisper"
+description = "Modelo pequeño y rápido para equipos sin GPU. Menos preciso con voces cantadas."
+license = "MIT"
+license_url = "https://huggingface.co/Systran/faster-whisper-small"
+commercial_use = true
+min_vram_gb = 1
+priority = 1
+
+[[files]]
+name = "model.bin"
+url = "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/model.bin"
+sha256 = "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"
+size = 483546902
+
+[[files]]
+name = "config.json"
+url = "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/config.json"
+sha256 = "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828"
+size = 2370
+
+[[files]]
+name = "tokenizer.json"
+url = "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/tokenizer.json"
+sha256 = "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"
+size = 2203239
+
+[[files]]
+name = "vocabulary.txt"
+url = "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/vocabulary.txt"
+sha256 = "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"
+size = 459861

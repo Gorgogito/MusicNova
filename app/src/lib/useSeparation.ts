@@ -16,7 +16,9 @@ export function useSeparation(onProject: (p: ProjectView) => void, onError: (m: 
   const [job, setJob] = useState<SeparationJob | null>(null)
   const [lastResult, setLastResult] = useState<SeparationResult | null>(null)
   const jobRef = useRef<SeparationJob | null>(null)
-  jobRef.current = job
+  useEffect(() => {
+    jobRef.current = job
+  }, [job])
 
   useEffect(() => {
     const un = events.worker((ev) => {

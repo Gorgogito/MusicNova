@@ -18,7 +18,9 @@ export function useAnalysis(
 ) {
   const [job, setJob] = useState<AnalysisJob | null>(null)
   const jobRef = useRef<AnalysisJob | null>(null)
-  jobRef.current = job
+  useEffect(() => {
+    jobRef.current = job
+  }, [job])
 
   useEffect(() => {
     const un = events.worker((ev) => {

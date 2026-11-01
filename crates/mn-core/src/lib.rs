@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod audio;
 pub mod export;
 pub mod ffmpeg;
+pub mod lyrics;
 pub mod mix;
 pub mod peaks;
 pub mod project;

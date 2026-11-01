@@ -24,6 +24,9 @@ compatibles.
 | librosa, beartype, rotary-embedding-torch, einops, julius | Separación RoFormer | ISC / MIT |
 | soundfile (libsndfile) | Lectura/escritura de audio en el worker | BSD-3-Clause / LGPL-2.1 |
 | SciPy, soxr, numba | Análisis musical (acordes, secciones, remuestreo) | BSD-3-Clause / LGPL-2.1 / BSD-2-Clause |
+| faster-whisper (incluye el VAD Silero), CTranslate2, tokenizers | Transcripción de letras | MIT / MIT / Apache-2.0 |
+| ONNX Runtime | VAD de faster-whisper | MIT |
+| NVIDIA cuBLAS para CUDA 12 (`nvidia-cublas-cu12`) | Whisper en GPU (solo se instala con pip; no se incluye en el repositorio) | Licencia NVIDIA de redistribución de CUDA |
 
 ## Descargas bajo demanda (no incluidas en el instalador)
 
@@ -35,3 +38,4 @@ Cada una se verifica con SHA-256 y la app muestra su licencia antes de descargar
 | Mel-Band RoFormer · Voz (Kimberley Jensen) | MIT | huggingface.co/KimberleyJSN/melbandroformer |
 | FFmpeg 9.0 (compilación LGPL) | LGPL-2.1-or-later | github.com/BtbN/FFmpeg-Builds |
 | Beat This! final0 y small0 (CPJKU, JKU Linz) | MIT (código y pesos) | cloud.cp.jku.at |
+| Whisper large-v3, large-v3 turbo y small (OpenAI) en formato CTranslate2 | MIT | huggingface.co/Systran, huggingface.co/deepdml |

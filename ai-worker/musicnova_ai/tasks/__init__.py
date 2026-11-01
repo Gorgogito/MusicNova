@@ -52,4 +52,4 @@ def register(cls: type[Task]) -> type[Task]:
 
 
 # Las tareas se registran al importar sus módulos.
-from . import analysis, separation  # noqa: E402,F401
+from . import analysis, lyrics, separation  # noqa: E402,F401

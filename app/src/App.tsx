@@ -6,6 +6,7 @@ import {
   events,
   type Analysis,
   type AppInfo,
+  type Lyrics,
   type PracticeSettings,
   type ProjectView,
   type TrackInfo,
@@ -20,6 +21,7 @@ import { ModelsView } from './views/ModelsView'
 import { SystemView } from './views/SystemView'
 import { useSeparation } from './lib/useSeparation'
 import { useAnalysis } from './lib/useAnalysis'
+import { useLyrics } from './lib/useLyrics'
 
 type View = 'projects' | 'studio' | 'models' | 'system'
 
@@ -109,7 +111,9 @@ export default function App() {
   // para que arrastrar un control no haga saltar el valor.
   const practiceSeq = useRef(0)
   const projectRef = useRef(project)
-  projectRef.current = project
+  useEffect(() => {
+    projectRef.current = project
+  }, [project])
   const changePractice = useCallback(
     (patch: Partial<PracticeSettings>) => {
       const current = projectRef.current
@@ -219,6 +223,11 @@ export default function App() {
     setProject((p) => p && { ...p, analysis })
   }, [])
 
+  const onLyrics = useCallback((lyrics: Lyrics) => {
+    setProject((p) => p && { ...p, lyrics })
+  }, [])
+  const lyricsJob = useLyrics(onLyrics, showError)
+
   const onTrackChange = useCallback((t: TrackInfo) => {
     setProject((p) => p && { ...p, tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, ...t } : x)) })
   }, [])
@@ -255,6 +264,14 @@ export default function App() {
             </div>
           </button>
         )}
+        {lyricsJob.job && (
+          <button className="sidebar-job small" onClick={() => setView('studio')}>
+            Transcribiendo… {Math.round(lyricsJob.job.progress * 100)}%
+            <div className="progress">
+              <div style={{ width: `${lyricsJob.job.progress * 100}%` }} />
+            </div>
+          </button>
+        )}
         {analysisJob.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
             Analizando… {Math.round(analysisJob.job.progress * 100)}%
@@ -282,6 +299,8 @@ export default function App() {
             onPracticeChange={changePractice}
             analysisJob={analysisJob}
             onAnalysisChange={onAnalysisChange}
+            lyricsJob={lyricsJob}
+            onLyricsChange={onLyrics}
           />
         )}
         {view === 'models' && <ModelsView worker={worker} onError={showError} />}

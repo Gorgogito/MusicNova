@@ -29,7 +29,7 @@ python -m venv .venv
 .venv\Scripts\python -m pip install -e ".[dev]"
 # PyTorch (CUDA 13; usa /whl/cpu si no tienes GPU NVIDIA) y dependencias de separación
 .venv\Scripts\python -m pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
-.venv\Scripts\python -m pip install -e ".[dev,separation,analysis]"
+.venv\Scripts\python -m pip install -e ".[dev,separation,analysis,lyrics]"
 .venv\Scripts\python -m pytest
 
 # 2. Interfaz y app

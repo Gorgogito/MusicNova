@@ -1125,3 +1125,92 @@ select.compact {
   color: var(--text);
   font: inherit;
 }
+
+/* ---------- Letras ---------- */
+.lyrics-head .compact {
+  margin-left: auto;
+}
+.karaoke {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0 6px;
+  text-align: center;
+}
+.karaoke-line {
+  min-height: 1.4em;
+  max-width: 100%;
+  cursor: pointer;
+  transition: color 0.2s, font-size 0.2s;
+}
+.karaoke-line.past {
+  color: var(--text-muted);
+  opacity: 0.55;
+  font-size: 15px;
+}
+.karaoke-line.next {
+  color: var(--text-muted);
+  font-size: 17px;
+}
+.karaoke-line.now {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.karaoke-line.empty {
+  cursor: default;
+}
+/* Cada palabra se rellena de izquierda a derecha según se canta. */
+.kw {
+  background: linear-gradient(90deg, var(--accent) var(--p), var(--text) var(--p));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.lyrics-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lyrics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.lyrics-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+.lyrics-row.now {
+  background: var(--bg-hover);
+}
+.lyrics-row input {
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+.lyrics-row input:focus {
+  border-color: var(--accent);
+  background: var(--bg);
+  outline: none;
+}
+.time-btn {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.time-btn:hover {
+  color: var(--accent);
+}

@@ -3,6 +3,7 @@ import {
   api,
   errorMessage,
   type Analysis,
+  type Lyrics,
   type PracticeSettings,
   type ProjectView,
   type SeparationResult,
@@ -20,6 +21,8 @@ import { Waveform } from '../components/Waveform'
 import { AnalysisPanel } from '../components/AnalysisPanel'
 import { AnalysisLanes } from '../components/AnalysisLanes'
 import type { AnalysisJob } from '../lib/useAnalysis'
+import type { LyricsJob } from '../lib/useLyrics'
+import { LyricsPanel } from '../components/LyricsPanel'
 import { usePref } from '../lib/prefs'
 import type { Notation } from '../lib/chords'
 
@@ -43,9 +46,15 @@ interface Props {
     cancel: () => void
   }
   onAnalysisChange: (a: Analysis) => void
+  lyricsJob: {
+    job: LyricsJob | null
+    start: (modelId: string | undefined, language: string, device: string) => void
+    cancel: () => void
+  }
+  onLyricsChange: (l: Lyrics) => void
 }
 
-type Panel = 'separate' | 'export' | 'practice' | 'analysis'
+type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics'
 
 const HEADER_W = 280
 
@@ -60,14 +69,22 @@ export function StudioView({
   onPracticeChange,
   analysisJob,
   onAnalysisChange,
+  lyricsJob,
+  onLyricsChange,
 }: Props) {
   const practice = project.project.practice
   const hasStems = project.tracks.some((t) => t.kind !== 'mix')
   const analysis = project.analysis
   const [panel, setPanel] = useState<Panel | null>(hasStems ? (analysis ? 'analysis' : 'practice') : 'separate')
-  const shownPanel = separation.job ? 'separate' : analysisJob.job ? 'analysis' : panel
+  const shownPanel = separation.job ? 'separate' : analysisJob.job ? 'analysis' : lyricsJob.job ? 'lyrics' : panel
   const [notation, setNotation] = usePref<Notation>('notation', 'english', ['english', 'latin'])
   const [instrument, setInstrument] = usePref<'guitar' | 'piano'>('instrument', 'guitar', ['guitar', 'piano'])
+
+  const hasVocalsStem = project.tracks.some((t) => t.file.startsWith('audio/stems/') && /\/vocals\.\w+$/.test(t.file))
+  const saveLyrics = (l: Lyrics) => {
+    onLyricsChange(l)
+    api.lyricsUpdate(l).then(onLyricsChange).catch((err) => onError(errorMessage(err)))
+  }
 
   const saveAnalysis = (a: Analysis) => {
     onAnalysisChange(a)
@@ -163,6 +180,12 @@ export function StudioView({
             <Icon name="chord" size={16} /> Análisis
           </button>
           <button
+            className={`btn ${shownPanel === 'lyrics' ? 'active' : ''}`}
+            onClick={() => setPanel(panel === 'lyrics' ? null : 'lyrics')}
+          >
+            <Icon name="lyrics" size={16} /> Letra
+          </button>
+          <button
             className={`btn ${shownPanel === 'practice' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'practice' ? null : 'practice')}
           >
@@ -189,6 +212,22 @@ export function StudioView({
         />
       )}
       {shownPanel === 'export' && <ExportPanel project={project} onError={onError} />}
+      {shownPanel === 'lyrics' && (
+        <LyricsPanel
+          lyrics={project.lyrics}
+          projectName={project.project.name}
+          hasVocalsStem={hasVocalsStem}
+          position={position}
+          job={lyricsJob.job}
+          workerReady={workerReady}
+          onStart={lyricsJob.start}
+          onCancel={lyricsJob.cancel}
+          onChange={saveLyrics}
+          onSeek={seek}
+          onOpenModels={onOpenModels}
+          onError={onError}
+        />
+      )}
       {shownPanel === 'analysis' && (
         <AnalysisPanel
           analysis={analysis}

@@ -31,7 +31,7 @@
 | Pulsos, BPM y secciones | Beat This! (código y pesos MIT, verificado); secciones propias | MIT |
 | Acordes | HMM propio sobre croma CQT con plantillas armónicas (fase 3); BTC opcional | Propio / por verificar |
 | Tonalidad | Perfiles Krumhansl/Temperley y CNN propio | Propio |
-| Letras | faster-whisper + stable-ts | MIT |
+| Letras | faster-whisper (CTranslate2) con marcas por palabra propias; stable-ts no hizo falta | MIT |
 | Instrumentos | PANNs, CLAP | MIT / Apache |
 | Audio a MIDI | Basic Pitch | Apache 2.0 |
 | Afinación vocal | torchcrepe / RMVPE | MIT |
@@ -49,7 +49,7 @@
 | 1b. Ampliación | Mel-Band RoFormer para voz (MIT verificada en la fuente), exportación FLAC/MP3, importar vídeo con FFmpeg LGPL bajo demanda | **Completada** |
 | 2. Práctica | Tempo (25–200 %) y tono (±12 st) en tiempo real con Signalsmith Stretch, bucle A-B, metrónomo con tap tempo, cuenta previa, entrenador de velocidad, marcadores, atajos | **Completada** (el metrónomo usa BPM manual hasta la fase 3) |
 | 3. Análisis musical | Pulsos y compases con Beat This! (respaldo librosa), BPM y mapa de tempo, tonalidad (Krumhansl + encaje diatónico), acordes por HMM sobre croma de stems armónicos (7 tipos), secciones por novedad de Foote, metrónomo sobre pulsos reales, diagramas de guitarra/piano, cejilla, notación Do-Re-Mi, corrección manual | **Completada** (acordes con modelo neuronal BTC pendientes de verificar licencia) |
-| 4. Letras | Whisper sobre la voz, sincronización por palabra, karaoke, LRC/SRT | Pendiente |
+| 4. Letras | Whisper (faster-whisper: large-v3 turbo, large-v3, small) sobre el stem de voz con VAD y filtro de alucinaciones, 99 idiomas con detección automática, marcas por palabra, reparto en versos, karaoke con relleno palabra a palabra, editor (texto, sincronía por línea y global), exportación LRC, LRC por palabra, SRT y TXT | **Completada** |
 | 5. Producción | Edición multipista, grabación, efectos, automatización, masterización, CLAP/VST3 | Pendiente |
 | 6. Transcripción | Audio a MIDI, piano roll, afinación vocal, detección de instrumentos | Pendiente |
 | 7. IA generativa | Stems de acompañamiento (ACE-Step/YuE), reducción de ruido | Pendiente |

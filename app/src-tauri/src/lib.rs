@@ -12,6 +12,7 @@ use mn_core::analysis::Analysis;
 use mn_core::audio::{self, AudioBuffer};
 use mn_core::export::{export_audio, ExportFormat};
 use mn_core::ffmpeg;
+use mn_core::lyrics::{Lyrics, LyricsFormat};
 use mn_core::mix::{mixdown, MixInput};
 use mn_core::peaks::{compute_peaks, Peaks};
 use mn_core::project::{sanitize_dir_name, BeatSource, PracticeSettings, Project, TrackInfo, TrackKind, PROJECT_FILE};
@@ -76,6 +77,7 @@ struct ProjectView {
     tracks: Vec<TrackView>,
     sample_rate: u32,
     analysis: Option<Analysis>,
+    lyrics: Option<Lyrics>,
 }
 
 #[derive(Serialize)]
@@ -171,6 +173,10 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
         eprintln!("[musicnova] análisis de {}: {e}", dir.display());
         None
     });
+    let lyrics = Lyrics::load(&dir).unwrap_or_else(|e| {
+        eprintln!("[musicnova] letras de {}: {e}", dir.display());
+        None
+    });
     let length = buffers.values().map(|b| (b.len() / 2) as u64).max().unwrap_or(0);
     apply_practice(engine, &project.practice, None, analysis.as_ref(), length)?;
 
@@ -180,6 +186,7 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
         tracks,
         sample_rate: rate,
         analysis: analysis.clone(),
+        lyrics,
     };
     let mut s = state.session.lock().unwrap();
     s.dir = Some(dir);
@@ -629,6 +636,69 @@ fn analysis_update(state: State<'_, AppState>, analysis: Analysis) -> Result<Ana
     Ok(analysis)
 }
 
+/// Frecuencia de Whisper.
+const LYRICS_RATE: u32 = 16_000;
+
+/// Lanza la transcripción de la letra, sobre el stem de voz si existe.
+#[tauri::command]
+async fn lyrics_start(
+    app: AppHandle,
+    model_id: Option<String>,
+    language: Option<String>,
+    device: Option<String>,
+) -> Result<Value, String> {
+    let state = app.state::<AppState>();
+    let (dir, project) = session_snapshot(&state)?;
+    let vocals = project
+        .tracks
+        .iter()
+        .filter(|t| t.file.starts_with("audio/stems/"))
+        .map(|t| project.track_path(&dir, t))
+        .find(|p| p.file_stem().and_then(|s| s.to_str()) == Some("vocals"));
+    let (input, source) = match vocals {
+        Some(p) => (p, "vocals"),
+        None => (write_mix_input(&dir, &project, "lyrics_input.wav", LYRICS_RATE).await?, "mix"),
+    };
+    let mut params = json!({
+        "input": input,
+        "source": source,
+        "output": Lyrics::path(&dir),
+        "language": language.unwrap_or_else(|| "auto".into()),
+        "device": device.unwrap_or_else(|| "auto".into()),
+    });
+    if let Some(m) = model_id {
+        params["model_id"] = json!(m);
+    }
+    state.worker.clone().call("tasks.run", json!({ "task": "transcribe", "params": params })).await
+}
+
+/// Carga la letra recién transcrita.
+#[tauri::command]
+fn lyrics_apply(state: State<'_, AppState>) -> Result<Lyrics, String> {
+    let (dir, _) = session_snapshot(&state)?;
+    Lyrics::load(&dir).map_err(err)?.ok_or_else(|| "la transcripción no generó resultados".into())
+}
+
+/// Guarda la letra corregida a mano.
+#[tauri::command]
+fn lyrics_update(state: State<'_, AppState>, lyrics: Lyrics) -> Result<Lyrics, String> {
+    let (dir, _) = session_snapshot(&state)?;
+    let mut lyrics = lyrics;
+    lyrics.normalize();
+    lyrics.save(&dir).map_err(err)?;
+    Ok(lyrics)
+}
+
+/// Exporta la letra a LRC, LRC por palabra, SRT o texto.
+#[tauri::command]
+fn lyrics_export(state: State<'_, AppState>, path: String, format: LyricsFormat) -> Result<String, String> {
+    let (dir, project) = session_snapshot(&state)?;
+    let lyrics = Lyrics::load(&dir).map_err(err)?.ok_or("el proyecto no tiene letra")?;
+    let path = Path::new(&path).with_extension(format.extension());
+    std::fs::write(&path, lyrics.export(format, &project.name)).map_err(err)?;
+    Ok(path.display().to_string())
+}
+
 #[derive(Serialize)]
 struct MixExport {
     path: String,
@@ -785,6 +855,10 @@ pub fn run() {
             analyze_start,
             analysis_apply,
             analysis_update,
+            lyrics_start,
+            lyrics_apply,
+            lyrics_update,
+            lyrics_export,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");

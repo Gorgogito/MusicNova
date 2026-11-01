@@ -37,6 +37,15 @@ analysis = [
     "einops",
     "rotary-embedding-torch",
 ]
+# Letras con Whisper (CTranslate2). En GPU NVIDIA, CTranslate2 necesita cuBLAS
+# de CUDA 12 aunque PyTorch use otra versión de CUDA.
+lyrics = [
+    "numpy>=2",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "faster-whisper>=1.1",
+    "nvidia-cublas-cu12; sys_platform == 'win32' or sys_platform == 'linux'",
+]
 
 [build-system]
 requires = ["setuptools>=69"]
