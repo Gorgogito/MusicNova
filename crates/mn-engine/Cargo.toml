@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 mn-core = { path = "../mn-core" }
 mn-stretch = { path = "../mn-stretch" }
+mn-fx = { path = "../mn-fx" }
 cpal = "0.16"
 rtrb = "0.3"
 thiserror = "2"

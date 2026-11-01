@@ -7,6 +7,7 @@ import {
   type Analysis,
   type AppInfo,
   type Lyrics,
+  type MasterSettings,
   type PracticeSettings,
   type ProjectView,
   type TrackInfo,
@@ -40,6 +41,8 @@ const IDLE: TransportEvent = {
   loop_count: 0,
   peak_l: 0,
   peak_r: 0,
+  lufs_m: null,
+  lufs_s: null,
 }
 
 export default function App() {
@@ -228,6 +231,10 @@ export default function App() {
   }, [])
   const lyricsJob = useLyrics(onLyrics, showError)
 
+  const onMasterChange = useCallback((master: MasterSettings) => {
+    setProject((p) => p && { ...p, project: { ...p.project, master } })
+  }, [])
+
   const onTrackChange = useCallback((t: TrackInfo) => {
     setProject((p) => p && { ...p, tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, ...t } : x)) })
   }, [])
@@ -301,6 +308,8 @@ export default function App() {
             onAnalysisChange={onAnalysisChange}
             lyricsJob={lyricsJob}
             onLyricsChange={onLyrics}
+            lufs={{ m: transport.lufs_m, s: transport.lufs_s }}
+            onMasterChange={onMasterChange}
           />
         )}
         {view === 'models' && <ModelsView worker={worker} onError={showError} />}

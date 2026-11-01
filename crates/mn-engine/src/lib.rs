@@ -6,7 +6,8 @@
 //! otro ring buffer para liberarlos fuera del hilo de audio.
 //!
 //! Funciones: mezcla multipista, tempo y tono en tiempo real (Signalsmith
-//! Stretch), bucle A-B, metrónomo sobre una rejilla de pulsos y cuenta previa.
+//! Stretch), bucle A-B, metrónomo sobre una rejilla de pulsos, cuenta previa,
+//! efectos por pista y en el bus máster y medición de sonoridad (LUFS).
 
 mod click;
 mod rt;
@@ -18,6 +19,7 @@ use std::thread;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
+use mn_fx::{Chain, EffectParams, EffectSlot};
 use rt::RtState;
 
 pub type TrackId = u64;
@@ -50,6 +52,7 @@ pub(crate) struct EngineTrack {
     solo: bool,
     gain_l: f32,
     gain_r: f32,
+    chain: Option<Box<Chain>>,
 }
 
 impl EngineTrack {
@@ -84,6 +87,7 @@ impl BeatGrid {
 pub(crate) enum Garbage {
     Track(Box<EngineTrack>),
     Beats(Box<BeatGrid>),
+    Chain(Box<Chain>),
 }
 
 pub(crate) enum Command {
@@ -105,6 +109,11 @@ pub(crate) enum Command {
     SetLoop { enabled: bool, start: u64, end: u64 },
     SetBeats(Box<BeatGrid>),
     SetMetronome { enabled: bool, gain: f32 },
+    /// Sustituye la cadena de efectos de una pista (`None` = bus máster).
+    SetChain(Option<TrackId>, Box<Chain>),
+    /// Cambia los parámetros de un efecto sin reconstruirlo.
+    SetEffectParams(Option<TrackId>, usize, EffectParams),
+    SetEffectEnabled(Option<TrackId>, usize, bool),
 }
 
 /// Estado publicado por el hilo de audio.
@@ -117,6 +126,9 @@ pub(crate) struct Shared {
     peak_l: AtomicU32,
     peak_r: AtomicU32,
     device_error: AtomicBool,
+    /// Sonoridad momentánea y a corto plazo (bits de f64).
+    lufs_m: AtomicU64,
+    lufs_s: AtomicU64,
 }
 
 impl Shared {
@@ -130,6 +142,8 @@ impl Shared {
             peak_l: AtomicU32::new(0),
             peak_r: AtomicU32::new(0),
             device_error: AtomicBool::new(false),
+            lufs_m: AtomicU64::new(f64::NEG_INFINITY.to_bits()),
+            lufs_s: AtomicU64::new(f64::NEG_INFINITY.to_bits()),
         }
     }
 }
@@ -145,6 +159,9 @@ pub struct TransportState {
     /// Picos de salida (lineales) desde la última lectura.
     pub peak_l: f32,
     pub peak_r: f32,
+    /// Sonoridad de la salida (sin metrónomo) en LUFS; `-inf` en silencio.
+    pub lufs_momentary: f64,
+    pub lufs_short_term: f64,
 }
 
 /// Manejador del motor; es `Send + Sync` y puede compartirse entre hilos.
@@ -245,6 +262,7 @@ impl Engine {
             solo: false,
             gain_l: 1.0,
             gain_r: 1.0,
+            chain: None,
         });
         t.update_gains();
         self.send(Command::AddTrack(t))?;
@@ -352,6 +370,22 @@ impl Engine {
         self.send(Command::SetBeats(Box::new(BeatGrid { frames, beats_per_bar: 0, downbeat_offset: 0, accents })))
     }
 
+    /// Sustituye la cadena de efectos de una pista o, con `None`, la del bus máster.
+    pub fn set_effects(&self, track: Option<TrackId>, slots: &[EffectSlot]) -> Result<(), EngineError> {
+        // Se construye aquí (reserva memoria); el hilo de audio solo la intercambia.
+        let chain = Box::new(Chain::new(slots, self.sample_rate));
+        self.send(Command::SetChain(track, chain))
+    }
+
+    /// Cambia los parámetros de un efecto de la cadena sin cortar su sonido.
+    pub fn set_effect_params(&self, track: Option<TrackId>, index: usize, params: EffectParams) -> Result<(), EngineError> {
+        self.send(Command::SetEffectParams(track, index, params))
+    }
+
+    pub fn set_effect_enabled(&self, track: Option<TrackId>, index: usize, enabled: bool) -> Result<(), EngineError> {
+        self.send(Command::SetEffectEnabled(track, index, enabled))
+    }
+
     pub fn set_metronome(&self, enabled: bool, gain_db: f32) -> Result<(), EngineError> {
         self.send(Command::SetMetronome { enabled, gain: mn_core::mix::db_to_gain(gain_db) })
     }
@@ -367,6 +401,8 @@ impl Engine {
             loop_count: sh.loop_count.load(Ordering::Relaxed),
             peak_l: f32::from_bits(sh.peak_l.swap(0, Ordering::Relaxed)),
             peak_r: f32::from_bits(sh.peak_r.swap(0, Ordering::Relaxed)),
+            lufs_momentary: f64::from_bits(sh.lufs_m.load(Ordering::Relaxed)),
+            lufs_short_term: f64::from_bits(sh.lufs_s.load(Ordering::Relaxed)),
         }
     }
 }
@@ -450,6 +486,7 @@ mod tests {
             solo: false,
             gain_l: 1.0,
             gain_r: 1.0,
+            chain: None,
         });
         t.update_gains();
         t
@@ -539,6 +576,62 @@ mod tests {
         assert_eq!((0..5).map(|i| g.is_downbeat(i)).collect::<Vec<_>>(), vec![false, true, false, false, true]);
         let g = BeatGrid { frames: vec![0, 10, 20, 30], beats_per_bar: 3, downbeat_offset: 1, accents: Vec::new() };
         assert_eq!((0..4).map(|i| g.is_downbeat(i)).collect::<Vec<_>>(), vec![false, true, false, false]);
+    }
+
+    fn limiter(ceiling_db: f32) -> Vec<EffectSlot> {
+        vec![EffectSlot {
+            id: "lim".into(),
+            enabled: true,
+            params: EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0 }),
+        }]
+    }
+
+    fn peak(buf: &[f32]) -> f32 {
+        buf.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn track_and_master_effects_are_applied_and_tweakable() {
+        let (mut rt, mut tx) = rt_with(vec![sine_track(1, 440.0, RATE as usize), sine_track(2, 220.0, RATE as usize)]);
+        // Limitador a -9 dBFS solo en la pista 1 (pico 0,5 → ≈0,355).
+        tx.push(Command::SetChain(Some(1), Box::new(Chain::new(&limiter(-9.0), RATE)))).ok();
+        tx.push(Command::SetMute(2, true)).ok();
+        tx.push(Command::Play).ok();
+        let mut out = vec![0.0f32; 2 * 9600];
+        rt.render(&mut out, 2);
+        let p = peak(&out[4800..]);
+        assert!(p <= 0.3549 && p > 0.34, "pista limitada: {p}");
+
+        // Cambio de parámetro sin reconstruir: techo a -12 dBFS.
+        tx.push(Command::SetEffectParams(
+            Some(1),
+            0,
+            EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db: -12.0, release_ms: 50.0 }),
+        ))
+        .ok();
+        rt.render(&mut out, 2);
+        let p = peak(&out[4800..]);
+        assert!(p <= 0.2512 && p > 0.24, "techo nuevo: {p}");
+
+        // Efecto desactivado → señal original; limitador en el máster a -6 dBFS.
+        tx.push(Command::SetEffectEnabled(Some(1), 0, false)).ok();
+        tx.push(Command::SetChain(None, Box::new(Chain::new(&limiter(-6.0), RATE)))).ok();
+        rt.render(&mut out, 2);
+        let p = peak(&out[4800..]);
+        assert!(p <= 0.5012 && p > 0.48, "solo el máster limita: {p}");
+    }
+
+    #[test]
+    fn loudness_meter_tracks_output() {
+        let (mut rt, mut tx) = rt_with(vec![sine_track(1, 1000.0, RATE as usize * 2)]);
+        tx.push(Command::Play).ok();
+        let mut out = vec![0.0f32; 2 * 4800];
+        for _ in 0..10 {
+            rt.render(&mut out, 2);
+        }
+        // Seno estéreo de amplitud 0,5 (-6,02 dBFS) a 1 kHz → ≈ -6,0 LUFS.
+        let m = f64::from_bits(rt.shared.lufs_m.load(Ordering::Relaxed));
+        assert!((m + 6.02).abs() < 0.2, "{m}");
     }
 
     #[test]

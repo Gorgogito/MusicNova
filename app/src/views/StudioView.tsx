@@ -3,7 +3,9 @@ import {
   api,
   errorMessage,
   type Analysis,
+  type EffectSlot,
   type Lyrics,
+  type MasterSettings,
   type PracticeSettings,
   type ProjectView,
   type SeparationResult,
@@ -23,6 +25,7 @@ import { AnalysisLanes } from '../components/AnalysisLanes'
 import type { AnalysisJob } from '../lib/useAnalysis'
 import type { LyricsJob } from '../lib/useLyrics'
 import { LyricsPanel } from '../components/LyricsPanel'
+import { MixPanel } from '../components/MixPanel'
 import { usePref } from '../lib/prefs'
 import type { Notation } from '../lib/chords'
 
@@ -52,9 +55,11 @@ interface Props {
     cancel: () => void
   }
   onLyricsChange: (l: Lyrics) => void
+  lufs: { m: number | null; s: number | null }
+  onMasterChange: (m: MasterSettings) => void
 }
 
-type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics'
+type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix'
 
 const HEADER_W = 280
 
@@ -71,6 +76,8 @@ export function StudioView({
   onAnalysisChange,
   lyricsJob,
   onLyricsChange,
+  lufs,
+  onMasterChange,
 }: Props) {
   const practice = project.project.practice
   const hasStems = project.tracks.some((t) => t.kind !== 'mix')
@@ -81,6 +88,27 @@ export function StudioView({
   const [instrument, setInstrument] = usePref<'guitar' | 'piano'>('instrument', 'guitar', ['guitar', 'piano'])
 
   const hasVocalsStem = project.tracks.some((t) => t.file.startsWith('audio/stems/') && /\/vocals\.\w+$/.test(t.file))
+  const [mixChannel, setMixChannel] = useState<string | null>(null)
+  const master = project.project.master
+  const setTrackEffects = (trackId: string, effects: EffectSlot[]) => {
+    const t = project.tracks.find((x) => x.id === trackId)
+    if (!t) return
+    onTrackChange({ ...t, effects })
+    api.effectsSet(trackId, effects).catch((err) => onError(errorMessage(err)))
+  }
+  const setMasterEffects = (effects: EffectSlot[]) => {
+    onMasterChange({ ...master, effects })
+    api.effectsSet(null, effects).catch((err) => onError(errorMessage(err)))
+  }
+  const setMasterGain = (gain_db: number) => {
+    onMasterChange({ ...master, gain_db })
+    api.masterGainSet(gain_db).catch((err) => onError(errorMessage(err)))
+  }
+  const openFx = (trackId: string) => {
+    setMixChannel(trackId)
+    setPanel('mix')
+  }
+
   const saveLyrics = (l: Lyrics) => {
     onLyricsChange(l)
     api.lyricsUpdate(l).then(onLyricsChange).catch((err) => onError(errorMessage(err)))
@@ -186,6 +214,12 @@ export function StudioView({
             <Icon name="lyrics" size={16} /> Letra
           </button>
           <button
+            className={`btn ${shownPanel === 'mix' ? 'active' : ''}`}
+            onClick={() => setPanel(panel === 'mix' ? null : 'mix')}
+          >
+            <Icon name="sliders" size={16} /> Mezcla
+          </button>
+          <button
             className={`btn ${shownPanel === 'practice' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'practice' ? null : 'practice')}
           >
@@ -212,6 +246,18 @@ export function StudioView({
         />
       )}
       {shownPanel === 'export' && <ExportPanel project={project} onError={onError} />}
+      {shownPanel === 'mix' && (
+        <MixPanel
+          tracks={project.tracks}
+          master={master}
+          selected={mixChannel}
+          lufs={lufs}
+          onSelect={setMixChannel}
+          onTrackEffects={setTrackEffects}
+          onMasterEffects={setMasterEffects}
+          onMasterGain={setMasterGain}
+        />
+      )}
       {shownPanel === 'lyrics' && (
         <LyricsPanel
           lyrics={project.lyrics}
@@ -310,6 +356,13 @@ export function StudioView({
                     onClick={() => update(t, { solo: !t.solo })}
                   >
                     S
+                  </button>
+                  <button
+                    className={`toggle fx ${t.effects.some((e) => e.enabled) ? 'on' : ''}`}
+                    title={t.effects.length ? `Efectos: ${t.effects.length}` : 'Añadir efectos'}
+                    onClick={() => openFx(t.id)}
+                  >
+                    FX
                   </button>
                 </div>
                 <label className="lane-slider" title={`Volumen: ${t.gain_db.toFixed(1)} dB (doble clic: 0 dB)`}>

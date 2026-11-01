@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mn-core", "crates/mn-engine", "crates/mn-stretch", "app/src-tauri"]
+members = ["crates/mn-core", "crates/mn-engine", "crates/mn-fx", "crates/mn-stretch", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,3 +10,17 @@ authors = ["Jorge Luis Torres Agapito"]
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# El audio en tiempo real (DSP, motor, estirador) necesita optimización también
+# en desarrollo: sin ella los efectos son decenas de veces más lentos.
+[profile.dev.package.mn-fx]
+opt-level = 3
+
+[profile.dev.package.mn-engine]
+opt-level = 3
+
+[profile.dev.package.mn-core]
+opt-level = 3
+
+[profile.dev.package.mn-stretch]
+opt-level = 3

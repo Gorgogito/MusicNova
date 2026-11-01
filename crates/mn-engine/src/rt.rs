@@ -8,6 +8,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cpal::{FromSample, SizedSample};
+use mn_fx::loudness::LoudnessMeter;
+use mn_fx::Chain;
 use mn_stretch::Stretch;
 
 use crate::click::Clicks;
@@ -20,6 +22,8 @@ pub const MAX_TEMPO: f64 = 2.0;
 const MIN_TEMPO: f64 = 0.25;
 /// Golpes de metrónomo pendientes (incluye la cuenta previa).
 const MAX_PENDING_CLICKS: usize = 32;
+/// Frames de entrada máximos por bloque (con el tempo al máximo).
+const MAX_IN_FRAMES: usize = (BLOCK as f64 * MAX_TEMPO) as usize + 4;
 
 #[derive(Clone, Copy)]
 struct PendingClick {
@@ -67,6 +71,12 @@ pub struct RtState {
 
     scratch_in: Vec<f32>,
     scratch_out: Vec<f32>,
+    /// Posición de origen de cada frame del bloque (`u64::MAX` = silencio).
+    src_pos: Vec<u64>,
+    /// Audio de una pista para procesar su cadena de efectos.
+    track_buf: Vec<f32>,
+    master_chain: Option<Box<Chain>>,
+    meter: LoudnessMeter,
 }
 
 impl RtState {
@@ -106,8 +116,12 @@ impl RtState {
             output_clock: 0,
             block_beats: [(0, false); 16],
             block_beats_len: 0,
-            scratch_in: vec![0.0; (BLOCK as f64 * MAX_TEMPO) as usize * 2 + 8],
+            scratch_in: vec![0.0; MAX_IN_FRAMES * 2],
             scratch_out: vec![0.0; BLOCK * 2],
+            src_pos: vec![u64::MAX; MAX_IN_FRAMES],
+            track_buf: vec![0.0; MAX_IN_FRAMES * 2],
+            master_chain: None,
+            meter: LoudnessMeter::new(sample_rate),
         }
     }
 
@@ -181,6 +195,7 @@ impl RtState {
                 while let Some(t) = self.tracks.pop() {
                     self.discard(Garbage::Track(t));
                 }
+                self.meter.reset();
                 if let Some(g) = self.beats.take() {
                     self.discard(Garbage::Beats(g));
                 }
@@ -263,15 +278,47 @@ impl RtState {
                 self.metronome_on = enabled;
                 self.metronome_gain = gain;
             }
+            Command::SetChain(target, chain) => {
+                let old = match target {
+                    None => self.master_chain.replace(chain),
+                    Some(id) => match find(&mut self.tracks, id) {
+                        Some(t) => t.chain.replace(chain),
+                        None => Some(chain),
+                    },
+                };
+                if let Some(c) = old {
+                    self.discard(Garbage::Chain(c));
+                }
+            }
+            Command::SetEffectParams(target, index, params) => {
+                if let Some(c) = self.chain_mut(target) {
+                    c.set_params(index, &params);
+                }
+            }
+            Command::SetEffectEnabled(target, index, enabled) => {
+                if let Some(c) = self.chain_mut(target) {
+                    c.set_enabled(index, enabled);
+                }
+            }
+        }
+    }
+
+    fn chain_mut(&mut self, target: Option<u64>) -> Option<&mut Chain> {
+        match target {
+            None => self.master_chain.as_deref_mut(),
+            Some(id) => self.tracks.iter_mut().find(|t| t.id == id).and_then(|t| t.chain.as_deref_mut()),
         }
     }
 
     /// Mezcla `frames` frames de las pistas a partir de la posición actual,
-    /// respetando el bucle, y anota los pulsos que se cruzan.
+    /// respetando el bucle, y anota los pulsos que se cruzan. Cada pista pasa
+    /// por su cadena de efectos antes del volumen y el panorama.
     fn mix_source(&mut self, frames: usize, into_scratch_in: bool) {
+        let frames = frames.min(MAX_IN_FRAMES);
         let any_solo = self.tracks.iter().any(|t| t.solo);
         let length = self.length();
         self.block_beats_len = 0;
+        // 1. Posiciones de origen del bloque (bucle y pulsos incluidos).
         for f in 0..frames {
             if self.loop_on && self.position >= self.loop_end {
                 self.position = self.loop_start;
@@ -289,21 +336,38 @@ impl RtState {
                     self.next_beat += 1;
                 }
             }
-            let (mut l, mut r) = (0.0f32, 0.0f32);
             if self.playing && p < length {
-                for t in &self.tracks {
-                    if t.mute || (any_solo && !t.solo) || p >= t.frames {
-                        continue;
-                    }
-                    let i = (p * 2) as usize;
-                    l += t.data[i] * t.gain_l;
-                    r += t.data[i + 1] * t.gain_r;
-                }
+                self.src_pos[f] = p;
                 self.position += 1;
+            } else {
+                self.src_pos[f] = u64::MAX;
             }
-            let buf = if into_scratch_in { &mut self.scratch_in } else { &mut self.scratch_out };
-            buf[f * 2] = l;
-            buf[f * 2 + 1] = r;
+        }
+        // 2. Cada pista: lectura, efectos y suma con volumen y panorama.
+        let out = if into_scratch_in { &mut self.scratch_in } else { &mut self.scratch_out };
+        out[..frames * 2].fill(0.0);
+        let track_buf = &mut self.track_buf[..frames * 2];
+        for t in &mut self.tracks {
+            if t.mute || (any_solo && !t.solo) {
+                continue;
+            }
+            for (f, &p) in self.src_pos[..frames].iter().enumerate() {
+                let (l, r) = if p < t.frames {
+                    let i = (p * 2) as usize;
+                    (t.data[i], t.data[i + 1])
+                } else {
+                    (0.0, 0.0)
+                };
+                track_buf[f * 2] = l;
+                track_buf[f * 2 + 1] = r;
+            }
+            if let Some(chain) = t.chain.as_deref_mut() {
+                chain.process(track_buf);
+            }
+            for (o, s) in out[..frames * 2].chunks_exact_mut(2).zip(track_buf.chunks_exact(2)) {
+                o[0] += s[0] * t.gain_l;
+                o[1] += s[1] * t.gain_r;
+            }
         }
         if !self.loop_on && self.position >= length {
             self.position = length;
@@ -386,10 +450,19 @@ impl RtState {
             self.apply(cmd);
         }
         self.render_music(n);
-        self.render_clicks(n);
+        // Bus máster: efectos, ganancia y medición (el metrónomo va después y no se mide).
+        if let Some(chain) = self.master_chain.as_deref_mut() {
+            if self.playing {
+                chain.process(&mut self.scratch_out[..n * 2]);
+            }
+        }
         for s in &mut self.scratch_out[..n * 2] {
             *s *= self.master;
         }
+        if self.playing {
+            self.meter.process(&self.scratch_out[..n * 2]);
+        }
+        self.render_clicks(n);
         self.output_clock += n as u64;
     }
 
@@ -434,5 +507,7 @@ impl RtState {
         // Retiene el pico máximo hasta que el control lo lea.
         sh.peak_l.fetch_max(pk_l.to_bits(), Ordering::Relaxed);
         sh.peak_r.fetch_max(pk_r.to_bits(), Ordering::Relaxed);
+        sh.lufs_m.store(self.meter.momentary().to_bits(), Ordering::Relaxed);
+        sh.lufs_s.store(self.meter.short_term().to_bits(), Ordering::Relaxed);
     }
 }

@@ -17,6 +17,7 @@ const PATHS: Record<string, string> = {
   mic: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7',
   pin: 'M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z',
   lyrics: 'M4 6h16M4 10h10M4 14h16M4 18h7M17 15v5M17 15l3-1',
+  sliders: 'M6 4v16M12 4v16M18 4v16M4 9h4M10 15h4M16 7h4',
   chord: 'M5 4v16M9.5 4v16M14 4v16M18.5 4v16M5 8h13.5M5 12h13.5M9.5 10h.01M14 14h.01M18.5 10h.01',
 }
 

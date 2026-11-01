@@ -17,6 +17,7 @@ use mn_core::mix::{mixdown, MixInput};
 use mn_core::peaks::{compute_peaks, Peaks};
 use mn_core::project::{sanitize_dir_name, BeatSource, PracticeSettings, Project, TrackInfo, TrackKind, PROJECT_FILE};
 use mn_engine::{Engine, TrackId};
+use mn_fx::{loudness, EffectSlot};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -97,6 +98,13 @@ struct TransportEvent {
     loop_count: u64,
     peak_l: f32,
     peak_r: f32,
+    /// LUFS momentáneo y a corto plazo (`null` en silencio).
+    lufs_m: Option<f64>,
+    lufs_s: Option<f64>,
+}
+
+fn finite(v: f64) -> Option<f64> {
+    v.is_finite().then_some(v)
 }
 
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -164,6 +172,9 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
         engine.set_pan(id, info.pan).map_err(err)?;
         engine.set_mute(id, info.mute).map_err(err)?;
         engine.set_solo(id, info.solo).map_err(err)?;
+        if !info.effects.is_empty() {
+            engine.set_effects(Some(id), &info.effects).map_err(err)?;
+        }
         ids.insert(info.id, id);
         tracks.push(TrackView { info: info.clone(), duration, peaks });
     }
@@ -177,6 +188,8 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
         eprintln!("[musicnova] letras de {}: {e}", dir.display());
         None
     });
+    engine.set_effects(None, &project.master.effects).map_err(err)?;
+    engine.set_master_gain_db(project.master.gain_db).map_err(err)?;
     let length = buffers.values().map(|b| (b.len() / 2) as u64).max().unwrap_or(0);
     apply_practice(engine, &project.practice, None, analysis.as_ref(), length)?;
 
@@ -704,6 +717,72 @@ struct MixExport {
     path: String,
     peak_db: f32,
     sample_rate: u32,
+    /// Sonoridad integrada (LUFS), pico real (dBTP) y rango de sonoridad (LU).
+    lufs: Option<f64>,
+    true_peak_db: Option<f64>,
+    lra: f64,
+}
+
+/// Cambia la cadena de efectos de una pista (o del máster con `track_id = null`).
+/// Si solo cambian parámetros o el encendido, se aplican en caliente sin
+/// reconstruir los efectos (no se cortan colas ni se oyen clics).
+#[tauri::command]
+fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<EffectSlot>) -> Result<Vec<EffectSlot>, String> {
+    let engine = state.engine()?;
+    let effects: Vec<EffectSlot> = effects
+        .into_iter()
+        .take(16)
+        .map(|mut s| {
+            s.params = s.params.sanitized();
+            s
+        })
+        .collect();
+    let mut guard = state.session.lock().unwrap();
+    let s = &mut *guard;
+    let engine_id = match track_id {
+        Some(id) => Some(*s.engine_ids.get(&id).ok_or("pista desconocida")?),
+        None => None,
+    };
+    let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
+    let current = match track_id {
+        Some(id) => &mut project.tracks.iter_mut().find(|t| t.id == id).ok_or("pista desconocida")?.effects,
+        None => &mut project.master.effects,
+    };
+    let same_layout = current.len() == effects.len()
+        && current.iter().zip(&effects).all(|(a, b)| a.id == b.id && a.params.kind() == b.params.kind());
+    if same_layout {
+        for (i, (old, new)) in current.iter().zip(&effects).enumerate() {
+            if old.params != new.params {
+                engine.set_effect_params(engine_id, i, new.params).map_err(err)?;
+            }
+            if old.enabled != new.enabled {
+                engine.set_effect_enabled(engine_id, i, new.enabled).map_err(err)?;
+            }
+        }
+    } else {
+        engine.set_effects(engine_id, &effects).map_err(err)?;
+    }
+    *current = effects.clone();
+    if let Some(dir) = s.dir.clone() {
+        project.save(&dir).map_err(err)?;
+    }
+    Ok(effects)
+}
+
+/// Ganancia del bus máster en dB.
+#[tauri::command]
+fn master_gain_set(state: State<'_, AppState>, gain_db: f32) -> Result<f32, String> {
+    let engine = state.engine()?;
+    let gain_db = gain_db.clamp(-24.0, 12.0);
+    let mut guard = state.session.lock().unwrap();
+    let s = &mut *guard;
+    let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
+    engine.set_master_gain_db(gain_db).map_err(err)?;
+    project.master.gain_db = gain_db;
+    if let Some(dir) = s.dir.clone() {
+        project.save(&dir).map_err(err)?;
+    }
+    Ok(gain_db)
 }
 
 /// Exporta la mezcla tal como suena (volumen, panorama, silencio y solo).
@@ -723,14 +802,28 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
             .filter_map(|t| {
                 buffers
                     .get(&t.id)
-                    .map(|d| MixInput { data: d, gain_db: t.gain_db, pan: t.pan, mute: t.mute, solo: t.solo })
+                    .map(|d| MixInput {
+                        data: d,
+                        gain_db: t.gain_db,
+                        pan: t.pan,
+                        mute: t.mute,
+                        solo: t.solo,
+                        effects: &t.effects,
+                    })
             })
             .collect();
-        let mixed = audio::resample(&mixdown(&inputs, rate), native_rate).map_err(err)?;
-        let peak = mixed.data.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let mixed = audio::resample(&mixdown(&inputs, &project.master, rate), native_rate).map_err(err)?;
+        let report = loudness::measure(&mixed.data, mixed.sample_rate);
         let path = Path::new(&path).with_extension(format.extension()).display().to_string();
         export_audio(Path::new(&path), &mixed, format).map_err(err)?;
-        Ok(MixExport { path, peak_db: 20.0 * peak.max(1e-9).log10(), sample_rate: mixed.sample_rate })
+        Ok(MixExport {
+            path,
+            peak_db: report.sample_peak_db.max(-120.0) as f32,
+            sample_rate: mixed.sample_rate,
+            lufs: finite(report.integrated),
+            true_peak_db: finite(report.true_peak_db),
+            lra: report.range,
+        })
     })
     .await
     .map_err(err)?
@@ -799,6 +892,8 @@ fn spawn_transport_events(app: AppHandle) {
                         loop_count: s.loop_count,
                         peak_l: s.peak_l,
                         peak_r: s.peak_r,
+                        lufs_m: finite(s.lufs_momentary),
+                        lufs_s: finite(s.lufs_short_term),
                     },
                 );
             }
@@ -859,6 +954,8 @@ pub fn run() {
             lyrics_apply,
             lyrics_update,
             lyrics_export,
+            effects_set,
+            master_gain_set,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");

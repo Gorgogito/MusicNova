@@ -42,8 +42,10 @@ export function ExportPanel({ project, onError }: { project: ProjectView; onErro
       })
       if (!path) return null
       const r = await api.exportMix(path, format)
-      const clip = r.peak_db > -0.1 ? ' ⚠ La mezcla satura: baja el volumen de algunas pistas.' : ''
-      return `Mezcla exportada (pico ${r.peak_db.toFixed(1)} dBFS, ${r.sample_rate} Hz).${clip}`
+      const tp = r.true_peak_db ?? r.peak_db
+      const clip = tp > -0.1 ? ' ⚠ Satura: baja el volumen o añade un limitador en el máster (Mezcla).' : ''
+      const loud = r.lufs != null ? `${r.lufs.toFixed(1)} LUFS, LRA ${r.lra.toFixed(1)} LU, ` : ''
+      return `Mezcla exportada (${loud}pico real ${tp.toFixed(1)} dBTP, ${r.sample_rate} Hz).${clip}`
     })
 
   const exportStems = () =>

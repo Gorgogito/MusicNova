@@ -2237,6 +2237,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "flacenc",
+ "mn-fx",
  "mp3lame-encoder",
  "rubato",
  "serde",
@@ -2252,9 +2253,18 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "mn-core",
+ "mn-fx",
  "mn-stretch",
  "rtrb",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mn-fx"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2318,6 +2328,7 @@ dependencies = [
  "chrono",
  "mn-core",
  "mn-engine",
+ "mn-fx",
  "serde",
  "serde_json",
  "tauri",

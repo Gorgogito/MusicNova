@@ -6,6 +6,32 @@ export type TrackKind =
   | 'mix' | 'vocals' | 'backing_vocals' | 'drums' | 'bass' | 'guitar'
   | 'piano' | 'other' | 'generated' | 'recording'
 
+export interface Band {
+  freq: number
+  gain_db: number
+  q: number
+}
+
+export type EffectParams =
+  | { type: 'eq'; highpass: number; low_shelf: Band; mid1: Band; mid2: Band; high_shelf: Band; lowpass: number }
+  | { type: 'compressor'; threshold_db: number; ratio: number; attack_ms: number; release_ms: number; knee_db: number; makeup_db: number }
+  | { type: 'reverb'; room_size: number; damping: number; width: number; predelay_ms: number; mix: number }
+  | { type: 'delay'; time_ms: number; feedback: number; high_cut: number; ping_pong: boolean; mix: number }
+  | { type: 'limiter'; input_db: number; ceiling_db: number; release_ms: number }
+
+export type EffectType = EffectParams['type']
+
+export interface EffectSlot {
+  id: string
+  enabled: boolean
+  params: EffectParams
+}
+
+export interface MasterSettings {
+  gain_db: number
+  effects: EffectSlot[]
+}
+
 export interface TrackInfo {
   id: string
   name: string
@@ -15,6 +41,7 @@ export interface TrackInfo {
   pan: number
   mute: boolean
   solo: boolean
+  effects: EffectSlot[]
 }
 
 export interface Peaks {
@@ -134,6 +161,7 @@ export interface Project {
   source_path: string | null
   tracks: TrackInfo[]
   practice: PracticeSettings
+  master: MasterSettings
 }
 
 export interface ProjectView {
@@ -170,6 +198,8 @@ export interface TransportEvent {
   loop_count: number
   peak_l: number
   peak_r: number
+  lufs_m: number | null
+  lufs_s: number | null
 }
 
 export interface WorkerStatus {
@@ -265,13 +295,23 @@ export const api = {
     invoke<{ job_id: string }>('separate_start', { modelId, device }),
   separateApply: (stems: StemOutput[]) => invoke<ProjectView>('separate_apply', { stems }),
   exportMix: (path: string, format: ExportFormat) =>
-    invoke<{ path: string; peak_db: number; sample_rate: number }>('export_mix', { path, format }),
+    invoke<{
+      path: string
+      peak_db: number
+      sample_rate: number
+      lufs: number | null
+      true_peak_db: number | null
+      lra: number
+    }>('export_mix', { path, format }),
   practiceSet: (settings: PracticeSettings) => invoke<PracticeSettings>('practice_set', { settings }),
   exportStems: (dir: string, format: ExportFormat) => invoke<string[]>('export_stems', { dir, format }),
   analyzeStart: (device?: string, beatModelId?: string) =>
     invoke<{ job_id: string }>('analyze_start', { device, beatModelId }),
   analysisApply: () => invoke<{ analysis: Analysis; practice: PracticeSettings }>('analysis_apply'),
   analysisUpdate: (analysis: Analysis) => invoke<Analysis>('analysis_update', { analysis }),
+  effectsSet: (trackId: string | null, effects: EffectSlot[]) =>
+    invoke<EffectSlot[]>('effects_set', { trackId, effects }),
+  masterGainSet: (gainDb: number) => invoke<number>('master_gain_set', { gainDb }),
   lyricsStart: (modelId?: string, language?: string, device?: string) =>
     invoke<{ job_id: string }>('lyrics_start', { modelId, language, device }),
   lyricsApply: () => invoke<Lyrics>('lyrics_apply'),

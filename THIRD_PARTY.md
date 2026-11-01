@@ -12,6 +12,8 @@ compatibles.
 | Signalsmith Stretch y Signalsmith Linear (cabeceras C++) | `crates/mn-stretch/vendor/` | MIT | Signalsmith Audio, vía signalsmith-stretch-rs 0.1.3 |
 | Envoltura C de Signalsmith Stretch | `crates/mn-stretch/vendor/wrapper/` | MIT | Colin Marc (signalsmith-stretch-rs) |
 
+Algoritmos implementados desde cero en `crates/mn-fx`: filtros del «Audio EQ Cookbook» (R. Bristow-Johnson), reverb según Freeverb (Jezar at Dreampoint, dominio público) y medición de sonoridad según ITU-R BS.1770-4 / EBU R128 (derivación de la ponderación K como en libebur128).
+
 ## Bibliotecas enlazadas o instaladas
 
 | Componente | Uso | Licencia |

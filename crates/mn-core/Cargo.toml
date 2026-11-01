@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+mn-fx = { path = "../mn-fx" }
 symphonia = { version = "0.5", features = ["all"] }
 rubato = "0.16"
 flacenc = "0.5"

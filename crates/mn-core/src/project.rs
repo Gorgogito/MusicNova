@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use mn_fx::EffectSlot;
 use uuid::Uuid;
 
 use crate::{CoreError, Result};
@@ -46,6 +47,9 @@ pub struct TrackInfo {
     pub pan: f32,
     pub mute: bool,
     pub solo: bool,
+    /// Cadena de efectos (antes del volumen y el panorama).
+    #[serde(default)]
+    pub effects: Vec<EffectSlot>,
 }
 
 impl TrackInfo {
@@ -59,8 +63,17 @@ impl TrackInfo {
             pan: 0.0,
             mute: false,
             solo: false,
+            effects: Vec::new(),
         }
     }
+}
+
+/// Bus máster: efectos y ganancia final (después del tempo y el tono).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MasterSettings {
+    pub gain_db: f32,
+    pub effects: Vec<EffectSlot>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -176,6 +189,8 @@ pub struct Project {
     pub tracks: Vec<TrackInfo>,
     #[serde(default)]
     pub practice: PracticeSettings,
+    #[serde(default)]
+    pub master: MasterSettings,
 }
 
 impl Project {
@@ -190,6 +205,7 @@ impl Project {
             source_path: None,
             tracks: Vec::new(),
             practice: PracticeSettings::default(),
+            master: MasterSettings::default(),
         }
     }
 
@@ -273,6 +289,7 @@ mod tests {
             "created":"2026-10-31T00:00:00Z","modified":"2026-10-31T00:00:00Z","source_path":null,"tracks":[]}"#;
         let p: Project = serde_json::from_str(json).unwrap();
         assert_eq!(p.practice, PracticeSettings::default());
+        assert_eq!(p.master, MasterSettings::default());
     }
 
     #[test]

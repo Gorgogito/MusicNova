@@ -1214,3 +1214,157 @@ select.compact {
 .time-btn:hover {
   color: var(--accent);
 }
+
+/* ---------- Mezcla y efectos ---------- */
+.mix {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.mix-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.mix-channel {
+  display: grid;
+  grid-template-columns: 4px 1fr;
+  gap: 10px;
+  align-items: stretch;
+  padding: 8px 10px 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.mix-channel > span:last-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.mix-channel strong,
+.mix-channel .small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mix-channel.on {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.mix-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  min-width: 0;
+}
+.rack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+.fx {
+  align-self: stretch;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+}
+.fx.off .fx-controls {
+  opacity: 0.45;
+}
+.fx > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.fx-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.fx-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px 16px;
+}
+.fx-control {
+  display: grid;
+  grid-template-columns: 110px 1fr 74px;
+  align-items: center;
+  gap: 8px;
+}
+.fx-control .mono {
+  text-align: right;
+}
+.toggle.fx.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06201b;
+}
+.master-strip {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: center;
+}
+.master-gain {
+  grid-template-columns: 110px 1fr 64px;
+}
+.lufs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lufs-values {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+}
+.lufs-values > span:not(.small) {
+  display: flex;
+  flex-direction: column;
+}
+.lufs-values strong {
+  font-size: 22px;
+}
+.lufs-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--bg-hover);
+}
+.lufs-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: var(--accent-grad);
+  transition: width 0.1s linear;
+}
+.lufs-m {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--text);
+  transition: left 0.1s linear;
+}
+.lufs-target {
+  position: absolute;
+  top: 12px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-muted);
+  border-left: 1px dashed var(--text-muted);
+  padding-left: 2px;
+}
