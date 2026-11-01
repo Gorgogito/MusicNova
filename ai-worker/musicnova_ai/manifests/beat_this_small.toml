@@ -1,0 +1,15 @@
+id = "beat_this_small"
+name = "Beat This! Small · Pulsos y compases"
+task = "beats"
+family = "beat_this"
+description = "Versión ligera (2 M de parámetros) de Beat This!. Algo menos precisa, ideal para equipos sin GPU."
+license = "MIT"
+license_url = "https://github.com/CPJKU/beat_this#license"
+commercial_use = true
+priority = 1
+
+[[files]]
+name = "small0.ckpt"
+url = "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/small0.ckpt"
+sha256 = "6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b"
+size = 8451101

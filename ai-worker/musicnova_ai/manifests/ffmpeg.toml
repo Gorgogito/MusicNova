@@ -1,0 +1,19 @@
+id = "ffmpeg"
+name = "FFmpeg 9.0 (LGPL)"
+task = "tool"
+family = "ffmpeg"
+description = "Permite importar vídeo (MP4, MKV, MOV, AVI…) y formatos de audio adicionales como Opus o WMA. Compilación LGPL de BtbN/FFmpeg-Builds."
+license = "LGPL-2.1-or-later"
+license_url = "https://github.com/BtbN/FFmpeg-Builds"
+commercial_use = true
+
+# Del zip solo se conservan el ejecutable y su licencia.
+[extract]
+"ffmpeg.exe" = "*/bin/ffmpeg.exe"
+"LICENSE.txt" = "*/LICENSE.txt"
+
+[[files]]
+name = "ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-9.0.zip"
+url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-9.0.zip"
+sha256 = "6b264b9e6019103f601d98c292bd332fd87acf1c5e941ddff4fb71760fe63432"
+size = 171535354

@@ -1,0 +1,15 @@
+id = "beat_this"
+name = "Beat This! · Pulsos y compases"
+task = "beats"
+family = "beat_this"
+description = "Detecta pulsos y tiempos fuertes con precisión de estado del arte, también con cambios de tempo. Recomendado para el metrónomo y los acordes."
+license = "MIT"
+license_url = "https://github.com/CPJKU/beat_this#license"
+commercial_use = true
+priority = 2
+
+[[files]]
+name = "final0.ckpt"
+url = "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt"
+sha256 = "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331"
+size = 81058141

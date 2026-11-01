@@ -1,0 +1,52 @@
+[project]
+name = "musicnova-ai"
+version = "0.1.0"
+description = "Proceso de IA local de MusicNova (separación, análisis, transcripción y generación)"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"
+# El núcleo del worker solo usa la biblioteca estándar. Cada familia de
+# modelos declara sus dependencias como extra opcional.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# PyTorch se instala aparte desde el índice de su backend, por ejemplo:
+#   pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+separation = [
+    "numpy>=2",
+    "soundfile>=0.12",
+    "demucs==4.0.1",
+    "dora-search",
+    "openunmix",
+    "einops",
+    "julius",
+    "lameenc",
+    # Mel-Band RoFormer
+    "librosa",
+    "beartype",
+    "rotary-embedding-torch",
+]
+# Análisis musical (pulsos, acordes, tonalidad, secciones). Beat This! usa
+# además torch/torchaudio, einops y rotary-embedding-torch.
+analysis = [
+    "numpy>=2",
+    "scipy",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "soxr",
+    "einops",
+    "rotary-embedding-torch",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["musicnova_ai*"]
+
+[tool.setuptools.package-data]
+musicnova_ai = ["manifests/*.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

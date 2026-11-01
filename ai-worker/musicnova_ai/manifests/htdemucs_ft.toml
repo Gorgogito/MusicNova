@@ -1,0 +1,36 @@
+id = "htdemucs_ft"
+name = "HTDemucs Fine-Tuned · 4 stems"
+task = "separation"
+family = "demucs"
+description = "Cuatro modelos HTDemucs afinados, uno por stem. Mejor calidad que HTDemucs, unas 4 veces más lento."
+license = "MIT"
+license_url = "https://github.com/facebookresearch/demucs/blob/main/LICENSE"
+commercial_use = true
+stems = ["drums", "bass", "other", "vocals"]
+min_vram_gb = 3
+# Cada modelo aporta solo el stem en el que está especializado.
+weights = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+
+[[files]]
+name = "f7e0c4bc-ba3fe64a.th"
+url = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th"
+sha256 = "ba3fe64a"
+size = 84141271
+
+[[files]]
+name = "d12395a8-e57c48e6.th"
+url = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th"
+sha256 = "e57c48e6"
+size = 84141271
+
+[[files]]
+name = "92cfc3b6-ef3bcb9c.th"
+url = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th"
+sha256 = "ef3bcb9c"
+size = 84141271
+
+[[files]]
+name = "04573f0d-f3cf25b2.th"
+url = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th"
+sha256 = "f3cf25b2"
+size = 84141271

@@ -1,0 +1,16 @@
+id = "htdemucs"
+name = "HTDemucs · 4 stems"
+task = "separation"
+family = "demucs"
+description = "Hybrid Transformer Demucs (Meta). Separa voz, batería, bajo y otros. Rápido y equilibrado."
+license = "MIT"
+license_url = "https://github.com/facebookresearch/demucs/blob/main/LICENSE"
+commercial_use = true
+stems = ["drums", "bass", "other", "vocals"]
+min_vram_gb = 3
+
+[[files]]
+name = "955717e8-8726e21a.th"
+url = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th"
+sha256 = "8726e21a"
+size = 84141911

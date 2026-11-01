@@ -1,0 +1,47 @@
+id = "mel_roformer_kim_vocals"
+name = "Mel-Band RoFormer · Voz"
+task = "separation"
+family = "mel_roformer"
+description = "Modelo de voz de Kimberley Jensen. Voz muy limpia e instrumental (mezcla menos voz). Ideal para karaoke y para aislar la voz."
+license = "MIT"
+license_url = "https://huggingface.co/KimberleyJSN/melbandroformer"
+commercial_use = true
+stems = ["vocals", "instrumental"]
+min_vram_gb = 4
+
+# Hiperparámetros del checkpoint (configs/KimberleyJensen/config_vocals_mel_band_roformer_kj.yaml de MSST).
+[config]
+dim = 384
+depth = 6
+stereo = true
+num_stems = 1
+time_transformer_depth = 1
+freq_transformer_depth = 1
+num_bands = 60
+dim_head = 64
+heads = 8
+attn_dropout = 0.0
+ff_dropout = 0.0
+flash_attn = true
+dim_freqs_in = 1025
+sample_rate = 44100
+stft_n_fft = 2048
+stft_hop_length = 441
+stft_win_length = 2048
+stft_normalized = false
+mask_estimator_depth = 2
+multi_stft_resolution_loss_weight = 1.0
+multi_stft_resolutions_window_sizes = [4096, 2048, 1024, 512, 256]
+multi_stft_hop_size = 147
+multi_stft_normalized = false
+
+[inference]
+chunk_size = 352800
+num_overlap = 2
+batch_size = 2
+
+[[files]]
+name = "MelBandRoformer.ckpt"
+url = "https://huggingface.co/KimberleyJSN/melbandroformer/resolve/ac9b0614ab3cd7f77219e18ba494dfd93956c348/MelBandRoformer.ckpt"
+sha256 = "87201f4d31afb5bc79993230fc49446918425574db48c01c405e44f365c7559e"
+size = 913106900
