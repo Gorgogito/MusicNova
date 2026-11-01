@@ -1,0 +1,25 @@
+[package]
+name = "musicnova"
+description = "MusicNova: estudio musical con IA local y gratuita"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "musicnova_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+mn-core = { path = "../../crates/mn-core" }
+mn-engine = { path = "../../crates/mn-engine" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }

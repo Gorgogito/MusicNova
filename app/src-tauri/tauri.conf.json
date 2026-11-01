@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MusicNova",
+  "version": "0.1.0",
+  "identifier": "org.musicnova.studio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MusicNova",
+        "width": 1400,
+        "height": 880,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "dragDropEnabled": true,
+        "backgroundColor": "#0d0f14"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "license": "GPL-3.0-or-later",
+    "category": "Music",
+    "shortDescription": "Estudio musical con IA local y gratuita",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
+  }
+}
