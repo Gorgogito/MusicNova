@@ -1,0 +1,13 @@
+[package]
+name = "mn-engine"
+description = "MusicNova: motor de audio en tiempo real (mezcla multipista y transporte)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mn-core = { path = "../mn-core" }
+mn-stretch = { path = "../mn-stretch" }
+cpal = "0.16"
+rtrb = "0.3"
+thiserror = "2"

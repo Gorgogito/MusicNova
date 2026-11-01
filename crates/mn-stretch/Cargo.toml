@@ -1,0 +1,9 @@
+[package]
+name = "mn-stretch"
+description = "MusicNova: cambio de tempo y tono en tiempo real (Signalsmith Stretch, MIT)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+cc = "1"

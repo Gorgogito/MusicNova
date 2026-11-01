@@ -1,0 +1,17 @@
+[package]
+name = "mn-core"
+description = "MusicNova: decodificación de audio, formas de onda y formato de proyecto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+symphonia = { version = "0.5", features = ["all"] }
+rubato = "0.16"
+flacenc = "0.5"
+mp3lame-encoder = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
