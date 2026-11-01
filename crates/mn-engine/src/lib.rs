@@ -582,7 +582,7 @@ mod tests {
         vec![EffectSlot {
             id: "lim".into(),
             enabled: true,
-            params: EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0 }),
+            params: EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0, true_peak: false }),
         }]
     }
 
@@ -606,7 +606,7 @@ mod tests {
         tx.push(Command::SetEffectParams(
             Some(1),
             0,
-            EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db: -12.0, release_ms: 50.0 }),
+            EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db: -12.0, release_ms: 50.0, true_peak: false }),
         ))
         .ok();
         rt.render(&mut out, 2);

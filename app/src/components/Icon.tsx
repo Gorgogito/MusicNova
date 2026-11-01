@@ -18,6 +18,7 @@ const PATHS: Record<string, string> = {
   pin: 'M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z',
   lyrics: 'M4 6h16M4 10h10M4 14h16M4 18h7M17 15v5M17 15l3-1',
   sliders: 'M6 4v16M12 4v16M18 4v16M4 9h4M10 15h4M16 7h4',
+  star: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z',
   chord: 'M5 4v16M9.5 4v16M14 4v16M18.5 4v16M5 8h13.5M5 12h13.5M9.5 10h.01M14 14h.01M18.5 10h.01',
 }
 

@@ -31,7 +31,7 @@ export function defaultParams(type: EffectType): EffectParams {
     case 'delay':
       return { type, time_ms: 375, feedback: 0.35, high_cut: 6000, ping_pong: true, mix: 0.25 }
     case 'limiter':
-      return { type, input_db: 0, ceiling_db: -1, release_ms: 80 }
+      return { type, input_db: 0, ceiling_db: -1, release_ms: 80, true_peak: false }
   }
 }
 

@@ -28,6 +28,8 @@ Algoritmos implementados desde cero en `crates/mn-fx`: filtros del «Audio EQ Co
 | SciPy, soxr, numba | Análisis musical (acordes, secciones, remuestreo) | BSD-3-Clause / LGPL-2.1 / BSD-2-Clause |
 | faster-whisper (incluye el VAD Silero), CTranslate2, tokenizers | Transcripción de letras | MIT / MIT / Apache-2.0 |
 | ONNX Runtime | VAD de faster-whisper | MIT |
+| Matchering 2.0 (sergree) | Master por referencia | GPL-3.0 |
+| statsmodels, pandas, resampy | Dependencias de Matchering | BSD-3-Clause / BSD-3-Clause / ISC |
 | NVIDIA cuBLAS para CUDA 12 (`nvidia-cublas-cu12`) | Whisper en GPU (solo se instala con pip; no se incluye en el repositorio) | Licencia NVIDIA de redistribución de CUDA |
 
 ## Descargas bajo demanda (no incluidas en el instalador)

@@ -125,6 +125,14 @@ pub struct LoudnessReport {
 
 /// Mide la sonoridad integrada, el rango y los picos de un audio estéreo entrelazado.
 pub fn measure(buf: &[f32], sample_rate: u32) -> LoudnessReport {
+    let (integrated, range) = loudness_only(buf, sample_rate);
+    let sample_peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs())) as f64;
+    let to_db = |x: f64| if x > 0.0 { 20.0 * x.log10() } else { f64::NEG_INFINITY };
+    LoudnessReport { integrated, range, true_peak_db: to_db(true_peak(buf)), sample_peak_db: to_db(sample_peak) }
+}
+
+/// Sonoridad integrada (LUFS) y rango de sonoridad (LU), sin calcular picos.
+pub fn loudness_only(buf: &[f32], sample_rate: u32) -> (f64, f64) {
     let sr = sample_rate as f64;
     let mut k = k_filters(sr);
     let step = (sample_rate as usize / 10).max(1); // 100 ms
@@ -181,9 +189,7 @@ pub fn measure(buf: &[f32], sample_rate: u32) -> LoudnessReport {
         }
     };
 
-    let sample_peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs())) as f64;
-    let to_db = |x: f64| if x > 0.0 { 20.0 * x.log10() } else { f64::NEG_INFINITY };
-    LoudnessReport { integrated, range, true_peak_db: to_db(true_peak(buf)), sample_peak_db: to_db(sample_peak) }
+    (integrated, range)
 }
 
 /// Pico real: interpolación ×4 con un filtro sinc enventanado (48 tomas por fase).
@@ -204,19 +210,33 @@ pub fn true_peak(buf: &[f32]) -> f64 {
         })
         .collect();
     let frames = buf.len() / 2;
+    let h = half as usize;
     let mut peak = 0.0f64;
+    // Cada canal en un vector contiguo con ceros a los lados: el bucle interno
+    // trabaja sobre porciones sin comprobaciones de límites (vectorizable).
+    let mut chan = vec![0.0f32; frames + TAPS];
+    let kernel32: Vec<[f32; TAPS]> = kernel.iter().map(|k| std::array::from_fn(|t| k[t] as f32)).collect();
     for ch in 0..2 {
-        let at = |i: isize| if i < 0 || i as usize >= frames { 0.0 } else { buf[i as usize * 2 + ch] as f64 };
-        for n in 0..frames as isize {
-            peak = peak.max(at(n).abs());
-            for k in kernel.iter().skip(1) {
-                let mut acc = 0.0;
-                for (t, c) in k.iter().enumerate() {
-                    acc += c * at(n + t as isize - half as isize + 1);
+        for (i, f) in buf.chunks_exact(2).enumerate() {
+            chan[h - 1 + i] = f[ch];
+        }
+        let mut pk = 0.0f32;
+        for n in 0..frames {
+            pk = pk.max(chan[h - 1 + n].abs());
+            let window = &chan[n..n + TAPS];
+            for k in kernel32.iter().skip(1) {
+                // 8 acumuladores independientes: permite vectorizar la suma.
+                let mut lanes = [0.0f32; 8];
+                for (xs, cs) in window.chunks_exact(8).zip(k.chunks_exact(8)) {
+                    for l in 0..8 {
+                        lanes[l] += xs[l] * cs[l];
+                    }
                 }
-                peak = peak.max(acc.abs());
+                let acc: f32 = lanes.iter().sum();
+                pk = pk.max(acc.abs());
             }
         }
+        peak = peak.max(pk as f64);
     }
     peak
 }

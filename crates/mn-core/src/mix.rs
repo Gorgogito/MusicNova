@@ -107,7 +107,7 @@ mod tests {
             vec![EffectSlot {
                 id: "l".into(),
                 enabled: true,
-                params: EffectParams::Limiter(LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0 }),
+                params: EffectParams::Limiter(LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0, true_peak: false }),
             }]
         };
         let track_fx = lim(-12.0);

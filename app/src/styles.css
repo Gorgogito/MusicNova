@@ -1368,3 +1368,47 @@ select.compact {
   border-left: 1px dashed var(--text-muted);
   padding-left: 2px;
 }
+
+/* ---------- Máster ---------- */
+.master {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.master-compare {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.master-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.master-summary strong {
+  font-size: 20px;
+}
+.ellipsis {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.progress.indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+.progress.indeterminate > div {
+  position: absolute;
+  width: 30%;
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes indeterminate {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}

@@ -117,11 +117,13 @@ pub struct LimiterParams {
     pub input_db: f32,
     pub ceiling_db: f32,
     pub release_ms: f32,
+    /// Limita también los picos entre muestras (dBTP), con sobremuestreo ×4.
+    pub true_peak: bool,
 }
 
 impl Default for LimiterParams {
     fn default() -> Self {
-        Self { input_db: 0.0, ceiling_db: -1.0, release_ms: 80.0 }
+        Self { input_db: 0.0, ceiling_db: -1.0, release_ms: 80.0, true_peak: false }
     }
 }
 
@@ -189,6 +191,7 @@ impl EffectParams {
                 input_db: p.input_db.clamp(0.0, 24.0),
                 ceiling_db: p.ceiling_db.clamp(-12.0, 0.0),
                 release_ms: p.release_ms.clamp(5.0, 1000.0),
+                true_peak: p.true_peak,
             }),
         }
     }

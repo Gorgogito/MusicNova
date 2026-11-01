@@ -6,6 +6,7 @@ pub mod audio;
 pub mod export;
 pub mod ffmpeg;
 pub mod lyrics;
+pub mod master;
 pub mod mix;
 pub mod peaks;
 pub mod project;

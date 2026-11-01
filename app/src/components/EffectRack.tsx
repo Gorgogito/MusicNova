@@ -32,6 +32,7 @@ export function EffectRack({ effects, onChange }: Props) {
       {effects.map((slot, i) => {
         const type = slot.params.type
         const delay = slot.params.type === 'delay' ? slot.params : null
+        const limiter = slot.params.type === 'limiter' ? slot.params : null
         return (
           <section key={slot.id} className={`fx ${slot.enabled ? '' : 'off'}`}>
             <header>
@@ -77,6 +78,16 @@ export function EffectRack({ effects, onChange }: Props) {
                     onChange={(e) => update(i, { ...slot, params: { ...delay, ping_pong: e.target.checked } })}
                   />
                   Ping-pong
+                </label>
+              )}
+              {limiter && (
+                <label className="inline small" title="Limita también los picos entre muestras (lo que miden las plataformas en dBTP)">
+                  <input
+                    type="checkbox"
+                    checked={limiter.true_peak}
+                    onChange={(e) => update(i, { ...slot, params: { ...limiter, true_peak: e.target.checked } })}
+                  />
+                  Pico real (dBTP)
                 </label>
               )}
             </div>

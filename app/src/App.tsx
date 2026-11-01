@@ -7,6 +7,7 @@ import {
   type Analysis,
   type AppInfo,
   type Lyrics,
+  type MasterReferenceResult,
   type MasterSettings,
   type PracticeSettings,
   type ProjectView,
@@ -23,6 +24,7 @@ import { SystemView } from './views/SystemView'
 import { useSeparation } from './lib/useSeparation'
 import { useAnalysis } from './lib/useAnalysis'
 import { useLyrics } from './lib/useLyrics'
+import { useMasterReference } from './lib/useMasterReference'
 
 type View = 'projects' | 'studio' | 'models' | 'system'
 
@@ -231,6 +233,13 @@ export default function App() {
   }, [])
   const lyricsJob = useLyrics(onLyrics, showError)
 
+  const [masterWarnings, setMasterWarnings] = useState<string[]>([])
+  const onMastered = useCallback((p: ProjectView, r: MasterReferenceResult) => {
+    setProject(p)
+    setMasterWarnings(r.warnings)
+  }, [])
+  const masterJob = useMasterReference(onMastered, showError)
+
   const onMasterChange = useCallback((master: MasterSettings) => {
     setProject((p) => p && { ...p, project: { ...p.project, master } })
   }, [])
@@ -268,6 +277,14 @@ export default function App() {
             Separando… {Math.round(separation.job.progress * 100)}%
             <div className="progress">
               <div style={{ width: `${separation.job.progress * 100}%` }} />
+            </div>
+          </button>
+        )}
+        {masterJob.job && (
+          <button className="sidebar-job small" onClick={() => setView('studio')}>
+            Masterizando… {Math.round(masterJob.job.progress * 100)}%
+            <div className="progress">
+              <div style={{ width: `${masterJob.job.progress * 100}%` }} />
             </div>
           </button>
         )}
@@ -310,6 +327,8 @@ export default function App() {
             onLyricsChange={onLyrics}
             lufs={{ m: transport.lufs_m, s: transport.lufs_s }}
             onMasterChange={onMasterChange}
+            masterJob={masterJob}
+            masterWarnings={masterWarnings}
           />
         )}
         {view === 'models' && <ModelsView worker={worker} onError={showError} />}

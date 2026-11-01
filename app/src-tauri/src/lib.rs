@@ -15,7 +15,10 @@ use mn_core::ffmpeg;
 use mn_core::lyrics::{Lyrics, LyricsFormat};
 use mn_core::mix::{mixdown, MixInput};
 use mn_core::peaks::{compute_peaks, Peaks};
-use mn_core::project::{sanitize_dir_name, BeatSource, PracticeSettings, Project, TrackInfo, TrackKind, PROJECT_FILE};
+use mn_core::master::{auto_master, with_auto_limiter};
+use mn_core::project::{
+    sanitize_dir_name, BeatSource, MasterSettings, PracticeSettings, Project, TrackInfo, TrackKind, PROJECT_FILE,
+};
 use mn_engine::{Engine, TrackId};
 use mn_fx::{loudness, EffectSlot};
 use serde::{Deserialize, Serialize};
@@ -723,6 +726,150 @@ struct MixExport {
     lra: f64,
 }
 
+/// Carpeta (relativa al proyecto) de los masters generados.
+const MASTER_DIR: &str = "audio/master/";
+
+/// Premezcla: las pistas con sus efectos, volumen y panorama, sin el bus
+/// máster ni los masters ya generados. Devuelve el audio a la frecuencia del motor.
+fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, u32), String> {
+    let rate = state.engine()?.sample_rate();
+    let (dir, project, buffers, native_rate) = {
+        let s = state.session.lock().unwrap();
+        let p = s.project.clone().ok_or("no hay ningún proyecto abierto")?;
+        let d = s.dir.clone().ok_or("no hay ningún proyecto abierto")?;
+        (d, p, s.buffers.clone(), s.native_rate)
+    };
+    let inputs: Vec<MixInput> = project
+        .tracks
+        .iter()
+        .filter(|t| !t.file.starts_with(MASTER_DIR))
+        .filter_map(|t| {
+            buffers.get(&t.id).map(|d| MixInput {
+                data: d,
+                gain_db: t.gain_db,
+                pan: t.pan,
+                mute: t.mute,
+                solo: t.solo,
+                effects: &t.effects,
+            })
+        })
+        .collect();
+    if inputs.is_empty() {
+        return Err("no hay pistas que masterizar".into());
+    }
+    let mixed = mixdown(&inputs, &MasterSettings::default(), rate);
+    Ok((mixed, project, dir, native_rate))
+}
+
+#[derive(Serialize)]
+struct LoudnessSummary {
+    lufs: Option<f64>,
+    true_peak_db: Option<f64>,
+    lra: f64,
+}
+
+impl From<&loudness::LoudnessReport> for LoudnessSummary {
+    fn from(r: &loudness::LoudnessReport) -> Self {
+        Self { lufs: finite(r.integrated), true_peak_db: finite(r.true_peak_db), lra: r.range }
+    }
+}
+
+#[derive(Serialize)]
+struct AutoMasterReport {
+    master: MasterSettings,
+    before: LoudnessSummary,
+    after: LoudnessSummary,
+    reached: bool,
+    passes: usize,
+}
+
+/// Masteriza a una sonoridad objetivo con un limitador de pico real al final
+/// del bus máster (se conservan los demás efectos del máster).
+#[tauri::command]
+async fn master_auto(app: AppHandle, target_lufs: f64, ceiling_db: f32) -> Result<AutoMasterReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let engine = state.engine()?;
+        let target = target_lufs.clamp(-30.0, -5.0);
+        let ceiling = ceiling_db.clamp(-6.0, 0.0);
+        let (premaster, project, dir, _) = render_premaster(&state)?;
+        let r = auto_master(&premaster.data, premaster.sample_rate, &project.master.effects, target, ceiling, |_| {});
+        if !r.before.integrated.is_finite() {
+            return Err("la mezcla está en silencio".into());
+        }
+        let master = MasterSettings {
+            gain_db: r.master_gain_db,
+            effects: with_auto_limiter(&project.master.effects, r.limiter_input_db, ceiling),
+        };
+        engine.set_effects(None, &master.effects).map_err(err)?;
+        engine.set_master_gain_db(master.gain_db).map_err(err)?;
+        let mut s = state.session.lock().unwrap();
+        if let Some(p) = s.project.as_mut() {
+            p.master = master.clone();
+            p.save(&dir).map_err(err)?;
+        }
+        Ok(AutoMasterReport { master, before: (&r.before).into(), after: (&r.after).into(), reached: r.reached, passes: r.passes })
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Frecuencia a la que trabaja Matchering.
+const MATCHERING_RATE: u32 = 44_100;
+
+/// Lanza el master por referencia (Matchering) sobre la premezcla.
+#[tauri::command]
+async fn master_reference_start(app: AppHandle, reference: String) -> Result<Value, String> {
+    let state = app.state::<AppState>();
+    let worker = state.worker.clone();
+    let app2 = app.clone();
+    let (target, output) = tauri::async_runtime::spawn_blocking(move || -> Result<(PathBuf, PathBuf), String> {
+        let state = app2.state::<AppState>();
+        let (premaster, _, dir, _) = render_premaster(&state)?;
+        let buf = audio::resample(&premaster, MATCHERING_RATE).map_err(err)?;
+        let target = dir.join("cache").join("master_target.wav");
+        std::fs::create_dir_all(target.parent().unwrap()).map_err(err)?;
+        audio::write_wav_f32(&target, &buf).map_err(err)?;
+        Ok((target, dir.join(MASTER_DIR).join("master_ref.wav")))
+    })
+    .await
+    .map_err(err)??;
+    worker
+        .call(
+            "tasks.run",
+            json!({ "task": "master_reference", "params": { "target": target, "reference": reference, "output": output } }),
+        )
+        .await
+}
+
+/// Añade el master por referencia como pista (en solo, para comparar A/B).
+#[tauri::command]
+async fn master_reference_apply(app: AppHandle, output: String, reference_name: String) -> Result<ProjectView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let engine = state.engine()?;
+        let (dir, mut project) = session_snapshot(&state)?;
+        let before = engine.state();
+        engine.pause().map_err(err)?;
+        let rel = Path::new(&output)
+            .strip_prefix(&dir)
+            .map_err(|_| format!("el master {output} está fuera del proyecto"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        project.tracks.retain(|t| !t.file.starts_with(MASTER_DIR));
+        let stem = Path::new(&reference_name).file_stem().and_then(|s| s.to_str()).unwrap_or("referencia");
+        let mut track = TrackInfo::new(format!("Máster · {stem}"), TrackKind::Generated, rel);
+        track.solo = true;
+        project.tracks.push(track);
+        project.save(&dir).map_err(err)?;
+        let view = load_into_engine(&state, dir, project)?;
+        engine.seek(before.position_frames).map_err(err)?;
+        Ok(view)
+    })
+    .await
+    .map_err(err)?
+}
+
 /// Cambia la cadena de efectos de una pista (o del máster con `track_id = null`).
 /// Si solo cambian parámetros o el encendido, se aplican en caliente sin
 /// reconstruir los efectos (no se cortan colas ni se oyen clics).
@@ -956,6 +1103,9 @@ pub fn run() {
             lyrics_export,
             effects_set,
             master_gain_set,
+            master_auto,
+            master_reference_start,
+            master_reference_apply,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");

@@ -17,7 +17,7 @@ export type EffectParams =
   | { type: 'compressor'; threshold_db: number; ratio: number; attack_ms: number; release_ms: number; knee_db: number; makeup_db: number }
   | { type: 'reverb'; room_size: number; damping: number; width: number; predelay_ms: number; mix: number }
   | { type: 'delay'; time_ms: number; feedback: number; high_cut: number; ping_pong: boolean; mix: number }
-  | { type: 'limiter'; input_db: number; ceiling_db: number; release_ms: number }
+  | { type: 'limiter'; input_db: number; ceiling_db: number; release_ms: number; true_peak: boolean }
 
 export type EffectType = EffectParams['type']
 
@@ -25,6 +25,27 @@ export interface EffectSlot {
   id: string
   enabled: boolean
   params: EffectParams
+}
+
+export interface LoudnessSummary {
+  lufs: number | null
+  true_peak_db: number | null
+  lra: number
+}
+
+export interface AutoMasterReport {
+  master: MasterSettings
+  before: LoudnessSummary
+  after: LoudnessSummary
+  reached: boolean
+  passes: number
+}
+
+export interface MasterReferenceResult {
+  output: string
+  reference: string
+  warnings: string[]
+  seconds: number
 }
 
 export interface MasterSettings {
@@ -312,6 +333,11 @@ export const api = {
   effectsSet: (trackId: string | null, effects: EffectSlot[]) =>
     invoke<EffectSlot[]>('effects_set', { trackId, effects }),
   masterGainSet: (gainDb: number) => invoke<number>('master_gain_set', { gainDb }),
+  masterAuto: (targetLufs: number, ceilingDb: number) =>
+    invoke<AutoMasterReport>('master_auto', { targetLufs, ceilingDb }),
+  masterReferenceStart: (reference: string) => invoke<{ job_id: string }>('master_reference_start', { reference }),
+  masterReferenceApply: (output: string, referenceName: string) =>
+    invoke<ProjectView>('master_reference_apply', { output, referenceName }),
   lyricsStart: (modelId?: string, language?: string, device?: string) =>
     invoke<{ job_id: string }>('lyrics_start', { modelId, language, device }),
   lyricsApply: () => invoke<Lyrics>('lyrics_apply'),

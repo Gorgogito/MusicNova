@@ -26,6 +26,8 @@ import type { AnalysisJob } from '../lib/useAnalysis'
 import type { LyricsJob } from '../lib/useLyrics'
 import { LyricsPanel } from '../components/LyricsPanel'
 import { MixPanel } from '../components/MixPanel'
+import { MasterPanel } from '../components/MasterPanel'
+import type { MasterJob } from '../lib/useMasterReference'
 import { usePref } from '../lib/prefs'
 import type { Notation } from '../lib/chords'
 
@@ -57,9 +59,11 @@ interface Props {
   onLyricsChange: (l: Lyrics) => void
   lufs: { m: number | null; s: number | null }
   onMasterChange: (m: MasterSettings) => void
+  masterJob: { job: MasterJob | null; start: (reference: string) => void; cancel: () => void }
+  masterWarnings: string[]
 }
 
-type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix'
+type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master'
 
 const HEADER_W = 280
 
@@ -78,12 +82,22 @@ export function StudioView({
   onLyricsChange,
   lufs,
   onMasterChange,
+  masterJob,
+  masterWarnings,
 }: Props) {
   const practice = project.project.practice
   const hasStems = project.tracks.some((t) => t.kind !== 'mix')
   const analysis = project.analysis
   const [panel, setPanel] = useState<Panel | null>(hasStems ? (analysis ? 'analysis' : 'practice') : 'separate')
-  const shownPanel = separation.job ? 'separate' : analysisJob.job ? 'analysis' : lyricsJob.job ? 'lyrics' : panel
+  const shownPanel = separation.job
+    ? 'separate'
+    : analysisJob.job
+      ? 'analysis'
+      : lyricsJob.job
+        ? 'lyrics'
+        : masterJob.job
+          ? 'master'
+          : panel
   const [notation, setNotation] = usePref<Notation>('notation', 'english', ['english', 'latin'])
   const [instrument, setInstrument] = usePref<'guitar' | 'piano'>('instrument', 'guitar', ['guitar', 'piano'])
 
@@ -104,6 +118,9 @@ export function StudioView({
     onMasterChange({ ...master, gain_db })
     api.masterGainSet(gain_db).catch((err) => onError(errorMessage(err)))
   }
+  // A/B del master por referencia: A silencia la pista de master; B la deja sola.
+  const toggleMasterAB = (t: TrackView) => update(t, t.solo ? { solo: false, mute: true } : { solo: true, mute: false })
+
   const openFx = (trackId: string) => {
     setMixChannel(trackId)
     setPanel('mix')
@@ -220,6 +237,12 @@ export function StudioView({
             <Icon name="sliders" size={16} /> Mezcla
           </button>
           <button
+            className={`btn ${shownPanel === 'master' ? 'active' : ''}`}
+            onClick={() => setPanel(panel === 'master' ? null : 'master')}
+          >
+            <Icon name="star" size={16} /> Máster
+          </button>
+          <button
             className={`btn ${shownPanel === 'practice' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'practice' ? null : 'practice')}
           >
@@ -246,6 +269,23 @@ export function StudioView({
         />
       )}
       {shownPanel === 'export' && <ExportPanel project={project} onError={onError} />}
+      {shownPanel === 'master' && (
+        <MasterPanel
+          tracks={project.tracks}
+          workerReady={workerReady}
+          job={masterJob.job}
+          lastWarnings={masterWarnings}
+          onStartReference={masterJob.start}
+          onCancelReference={masterJob.cancel}
+          onMasterChange={onMasterChange}
+          onToggleSolo={toggleMasterAB}
+          onOpenMix={() => {
+            setMixChannel(null)
+            setPanel('mix')
+          }}
+          onError={onError}
+        />
+      )}
       {shownPanel === 'mix' && (
         <MixPanel
           tracks={project.tracks}

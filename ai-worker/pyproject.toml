@@ -46,6 +46,12 @@ lyrics = [
     "faster-whisper>=1.1",
     "nvidia-cublas-cu12; sys_platform == 'win32' or sys_platform == 'linux'",
 ]
+# Master por referencia (Matchering 2.0, GPL-3.0).
+mastering = [
+    "numpy>=2",
+    "soundfile>=0.12",
+    "matchering>=2.0.6",
+]
 
 [build-system]
 requires = ["setuptools>=69"]
