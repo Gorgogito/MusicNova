@@ -10,6 +10,7 @@ mn-fx = { path = "../mn-fx" }
 mn-stretch = { path = "../mn-stretch" }
 symphonia = { version = "0.5", features = ["all"] }
 rubato = "0.16"
+realfft = "3"
 flacenc = "0.5"
 mp3lame-encoder = "0.2"
 serde = { version = "1", features = ["derive"] }

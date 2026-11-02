@@ -2268,6 +2268,7 @@ dependencies = [
  "mn-fx",
  "mn-stretch",
  "mp3lame-encoder",
+ "realfft",
  "rubato",
  "serde",
  "serde_json",

@@ -31,7 +31,7 @@ const PITCH_RATE: u32 = 16_000;
 const INSTRUMENTS_RATE: u32 = 32_000;
 
 /// Audio de una pista con sus clips, a la frecuencia del motor, desde el instante 0.
-fn render_track_audio(state: &AppState, track_id: Uuid) -> Result<(AudioBuffer, TrackInfo), String> {
+pub(crate) fn render_track_audio(state: &AppState, track_id: Uuid) -> Result<(AudioBuffer, TrackInfo), String> {
     let rate = state.engine()?.sample_rate();
     let (info, data) = {
         let s = state.session.lock().unwrap();
@@ -189,7 +189,7 @@ pub fn notes_export_midi(state: State<'_, AppState>, path: String, track_id: Opt
 }
 
 /// Añade una pista generada al proyecto y lo recarga en el motor.
-fn add_generated_track(state: &AppState, rel: String, name: String, mute_source: Option<Uuid>) -> Result<ProjectView, String> {
+pub(crate) fn add_generated_track(state: &AppState, rel: String, name: String, mute_source: Option<Uuid>) -> Result<ProjectView, String> {
     let engine = state.engine()?;
     let (dir, mut project) = session_snapshot(state)?;
     let before = engine.state();

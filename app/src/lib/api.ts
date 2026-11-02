@@ -302,6 +302,31 @@ export interface Transcription {
   tracks: TrackNotes[]
 }
 
+/** Reducción de ruido constante (espectral, sin IA). */
+export interface DenoiseSettings {
+  /** Atenuación máxima del ruido en dB. */
+  reduction_db: number
+  /** 0–1: cuánto ruido se supone (0,5 = el estimado). */
+  sensitivity: number
+  /** Tramo (s) con solo ruido para tomar el perfil. */
+  noise_region: [number, number] | null
+}
+
+/** Pistas que sabe generar ACE-Step. */
+export type GeneratedTrack =
+  | 'drums'
+  | 'bass'
+  | 'guitar'
+  | 'keyboard'
+  | 'strings'
+  | 'synth'
+  | 'percussion'
+  | 'brass'
+  | 'woodwinds'
+  | 'backing_vocals'
+  | 'vocals'
+  | 'fx'
+
 /** Detector de tono de la voz: CREPE (red neuronal, completo o rápido) o pYIN. */
 export type PitchEngine = 'crepe-full' | 'crepe-tiny' | 'pyin'
 
@@ -539,6 +564,13 @@ export const api = {
   instrumentsStart: (modelId: string | undefined, device: string) =>
     invoke<{ job_id: string }>('instruments_start', { modelId, device }),
   instrumentsApply: () => invoke<InstrumentReport>('instruments_apply'),
+  denoiseSteady: (trackId: string, settings: DenoiseSettings) => invoke<ProjectView>('denoise_steady', { trackId, settings }),
+  denoiseVoiceStart: (trackId: string, attenLimDb: number | null) =>
+    invoke<{ job_id: string }>('denoise_voice_start', { trackId, attenLimDb }),
+  denoiseVoiceApply: (trackId: string) => invoke<ProjectView>('denoise_voice_apply', { trackId }),
+  generateStart: (track: GeneratedTrack, caption: string, context: 'audible' | 'original', steps: number, seed: number | null) =>
+    invoke<{ job_id: string }>('generate_start', { track, caption, context, steps, seed }),
+  generateApply: (track: GeneratedTrack) => invoke<ProjectView>('generate_apply', { track }),
   inputDevices: () => invoke<InputDeviceInfo[]>('input_devices'),
   inputOpen: (device: string | null, channels: InputChannels) => invoke<InputInfo>('input_open', { device, channels }),
   inputClose: () => invoke<void>('input_close'),

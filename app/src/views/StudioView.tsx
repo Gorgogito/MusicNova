@@ -21,6 +21,8 @@ import {
 } from '../lib/api'
 import { NotesLane } from '../components/NotesLane'
 import { TranscriptionPanel } from '../components/TranscriptionPanel'
+import { GenerationPanel } from '../components/GenerationPanel'
+import type { GenerationJobs } from '../lib/useGeneration'
 import type { TranscriptionJobs } from '../lib/useTranscription'
 import { RecordPanel } from '../components/RecordPanel'
 import type { Recorder } from '../lib/useRecorder'
@@ -82,12 +84,13 @@ interface Props {
   masterJob: { job: MasterJob | null; start: (reference: string) => void; cancel: () => void }
   masterWarnings: string[]
   transcriptionJobs: TranscriptionJobs
+  generationJobs: GenerationJobs
   onNotesChange: (t: Transcription) => void
   /** El proyecto cambió entero (pistas nuevas generadas en el núcleo). */
   onProjectReplaced: (p: ProjectView) => void
 }
 
-type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record' | 'transcription'
+type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record' | 'transcription' | 'generate'
 
 const HEADER_W = 280
 const MAX_ZOOM = 64
@@ -125,6 +128,7 @@ export function StudioView({
   masterJob,
   masterWarnings,
   transcriptionJobs,
+  generationJobs,
   onNotesChange,
   onProjectReplaced,
 }: Props) {
@@ -149,7 +153,9 @@ export function StudioView({
           ? 'master'
           : transcriptionJobs.job
             ? 'transcription'
-            : panel
+            : generationJobs.job
+              ? 'generate'
+              : panel
   const [notation, setNotation] = usePref<Notation>('notation', 'english', ['english', 'latin'])
   const [instrument, setInstrument] = usePref<'guitar' | 'piano'>('instrument', 'guitar', ['guitar', 'piano'])
 
@@ -539,9 +545,10 @@ export function StudioView({
 
   const trackNotes = (id: string) => project.notes?.tracks.find((t) => t.track_id === id)
   const pitchFor = (id: string) => (project.pitch?.track_id === id ? project.pitch : null)
-  /** Tomas y pistas generadas por la transcripción (síntesis MIDI, voz afinada). */
+  /** Tomas y pistas generadas (síntesis MIDI, voz afinada, sin ruido, acompañamientos de IA). */
   const removable = (t: TrackView) =>
-    t.kind === 'recording' || (t.kind === 'generated' && (t.file.startsWith('audio/midi/') || t.file.startsWith('audio/tuned/')))
+    t.kind === 'recording' ||
+    (t.kind === 'generated' && ['audio/midi/', 'audio/tuned/', 'audio/denoised/', 'audio/generated/'].some((d) => t.file.startsWith(d)))
   const removeTrack = async (t: TrackView) => {
     const ok = await ask(`¿Eliminar «${t.name}»? Su audio se borrará del proyecto.`, {
       title: 'Eliminar pista',
@@ -642,6 +649,13 @@ export function StudioView({
             <Icon name="piano" size={16} /> Transcripción
           </button>
           <button
+            className={`btn ${shownPanel === 'generate' ? 'active' : ''}`}
+            onClick={() => setPanel(panel === 'generate' ? null : 'generate')}
+            title="Limpiar ruido y generar acompañamientos con IA"
+          >
+            <Icon name="sparkle" size={16} /> IA generativa
+          </button>
+          <button
             className={`btn ${shownPanel === 'lyrics' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'lyrics' ? null : 'lyrics')}
           >
@@ -730,6 +744,17 @@ export function StudioView({
           onCancel={lyricsJob.cancel}
           onChange={saveLyrics}
           onSeek={seek}
+          onOpenModels={onOpenModels}
+          onError={onError}
+        />
+      )}
+      {shownPanel === 'generate' && (
+        <GenerationPanel
+          project={project}
+          jobs={generationJobs}
+          workerReady={workerReady}
+          notation={notation}
+          onProjectReplaced={onProjectReplaced}
           onOpenModels={onOpenModels}
           onError={onError}
         />

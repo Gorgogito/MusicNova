@@ -4,6 +4,7 @@
 pub mod analysis;
 pub mod automation;
 pub mod audio;
+pub mod denoise;
 pub mod export;
 pub mod ffmpeg;
 pub mod lyrics;

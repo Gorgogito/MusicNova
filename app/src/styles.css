@@ -1936,3 +1936,13 @@ input.num.wide {
     grid-column: 2;
   }
 }
+
+/* ---- Fase 7: IA generativa ---- */
+.field.grow {
+  flex: 1;
+  min-width: 240px;
+}
+.field input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+}

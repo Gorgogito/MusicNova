@@ -1,0 +1,21 @@
+id = "deepfilternet3"
+name = "DeepFilterNet3 · Limpieza de voz"
+task = "denoise"
+family = "deepfilternet"
+description = "Quita ruido de fondo (ventiladores, tráfico, sala, siseo) de voces y habla a 48 kHz. Pequeño y rápido: funciona bien en CPU."
+license = "MIT OR Apache-2.0"
+license_url = "https://github.com/Rikorose/DeepFilterNet"
+commercial_use = true
+
+# Del tar.gz solo se conservan los tres grafos ONNX y su configuración.
+[extract]
+"enc.onnx" = "*/enc.onnx"
+"erb_dec.onnx" = "*/erb_dec.onnx"
+"df_dec.onnx" = "*/df_dec.onnx"
+"config.ini" = "*/config.ini"
+
+[[files]]
+name = "DeepFilterNet3_onnx.tar.gz"
+url = "https://github.com/Rikorose/DeepFilterNet/raw/84d57ec2c08fe08e68a13fb32a58cd7092060a0f/models/DeepFilterNet3_onnx.tar.gz"
+sha256 = "c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616"
+size = 7983136

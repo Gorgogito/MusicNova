@@ -31,6 +31,7 @@ import { useSeparation } from './lib/useSeparation'
 import { useAnalysis } from './lib/useAnalysis'
 import { useLyrics } from './lib/useLyrics'
 import { JOB_LABEL, useTranscription } from './lib/useTranscription'
+import { GENERATION_LABEL, useGeneration } from './lib/useGeneration'
 import { useMasterReference } from './lib/useMasterReference'
 import { useRecorder } from './lib/useRecorder'
 
@@ -282,6 +283,7 @@ export default function App() {
   )
   const transcriptionJobs = useTranscription(transcriptionHandlers, showError)
   const onProjectReplaced = useCallback((p: ProjectView) => setProject(p), [])
+  const generationJobs = useGeneration(onProjectReplaced, () => {}, showError)
 
   const [masterWarnings, setMasterWarnings] = useState<string[]>([])
   const onMastered = useCallback((p: ProjectView, r: MasterReferenceResult) => {
@@ -376,6 +378,14 @@ export default function App() {
             </div>
           </button>
         )}
+        {generationJobs.job && (
+          <button className="sidebar-job small" onClick={() => setView('studio')}>
+            {GENERATION_LABEL[generationJobs.job.kind]}… {Math.round(generationJobs.job.progress * 100)}%
+            <div className="progress">
+              <div style={{ width: `${generationJobs.job.progress * 100}%` }} />
+            </div>
+          </button>
+        )}
         {transcriptionJobs.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
             {JOB_LABEL[transcriptionJobs.job.kind]}… {Math.round(transcriptionJobs.job.progress * 100)}%
@@ -430,6 +440,7 @@ export default function App() {
             masterJob={masterJob}
             masterWarnings={masterWarnings}
             transcriptionJobs={transcriptionJobs}
+            generationJobs={generationJobs}
             onNotesChange={onNotesChange}
             onProjectReplaced={onProjectReplaced}
           />

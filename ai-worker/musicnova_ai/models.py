@@ -12,6 +12,7 @@ import hashlib
 import os
 import shutil
 import sys
+import tarfile
 import tomllib
 import urllib.request
 import zipfile
@@ -69,7 +70,10 @@ class ModelManifest:
         for f in files:
             if len(f.sha256) < 8 or any(c not in "0123456789abcdef" for c in f.sha256.lower()):
                 raise ValueError(f"{path.name}: sha256 inválido para {f.name}")
-            if "/" in f.name or "\\" in f.name or f.name.startswith("."):
+            # Se admiten subcarpetas («vae/config.json»), pero nada que salga de
+            # la carpeta del modelo ni nombres ocultos.
+            parts = f.name.split("/")
+            if "\\" in f.name or ":" in f.name or any(not p or p.startswith(".") for p in parts):
                 raise ValueError(f"{path.name}: nombre de archivo inválido {f.name}")
         return cls(
             id=raw["id"],
@@ -155,6 +159,7 @@ class ModelManager:
         done_bytes = 0
         for f in m.files:
             dest = target / f.name
+            dest.parent.mkdir(parents=True, exist_ok=True)
             if dest.is_file() and _sha256_matches(_sha256_file(dest), f.sha256):
                 done_bytes += dest.stat().st_size
                 continue
@@ -206,12 +211,26 @@ class ModelManager:
 
 
 def _extract_members(archive: Path, target: Path, mapping: dict[str, str]) -> None:
-    """Extrae de un zip los miembros indicados: {nombre_destino: patrón_glob}."""
+    """Extrae de un zip o un tar.gz los miembros indicados: {nombre_destino:
+    patrón_glob}. Solo se escriben los nombres de destino (sin rutas del archivo)."""
+    for dest_name in mapping:
+        if "/" in dest_name or "\\" in dest_name or dest_name.startswith("."):
+            raise ValueError(f"nombre de destino inválido: {dest_name}")
+    if archive.name.endswith((".tar.gz", ".tgz")):
+        with tarfile.open(archive, "r:gz") as t:
+            members = [m for m in t.getmembers() if m.isfile()]
+            for dest_name, pattern in mapping.items():
+                match = next((m for m in members if fnmatch.fnmatch(m.name, pattern)), None)
+                if match is None:
+                    raise ValueError(f"{archive.name} no contiene {pattern}")
+                src = t.extractfile(match)
+                assert src is not None
+                with src, (target / dest_name).open("wb") as out:
+                    shutil.copyfileobj(src, out)
+        return
     with zipfile.ZipFile(archive) as z:
         names = z.namelist()
         for dest_name, pattern in mapping.items():
-            if "/" in dest_name or "\\" in dest_name or dest_name.startswith("."):
-                raise ValueError(f"nombre de destino inválido: {dest_name}")
             match = next((n for n in names if fnmatch.fnmatch(n, pattern)), None)
             if match is None:
                 raise ValueError(f"{archive.name} no contiene {pattern}")

@@ -2,6 +2,7 @@
 //! los proyectos y el proceso de IA.
 
 mod plugins;
+mod generate;
 mod transcribe;
 mod worker;
 
@@ -1389,7 +1390,10 @@ fn track_remove(state: State<'_, AppState>, track_id: Uuid) -> Result<(), String
     project.save(&dir).map_err(err)?;
     let slot_ids = plugin_slot_ids(project);
     mn_plugin::retain_instances(|id| slot_ids.iter().any(|s| s == id));
-    if [RECORDINGS_DIR, transcribe::MIDI_DIR, transcribe::TUNED_DIR].iter().any(|d| track.file.starts_with(d)) {
+    if [RECORDINGS_DIR, transcribe::MIDI_DIR, transcribe::TUNED_DIR, generate::DENOISED_DIR, generate::GENERATED_DIR]
+        .iter()
+        .any(|d| track.file.starts_with(d))
+    {
         let _ = std::fs::remove_file(project.track_path(&dir, &track));
     }
     Ok(())
@@ -1533,6 +1537,11 @@ pub fn run() {
             transcribe::tune_render,
             transcribe::instruments_start,
             transcribe::instruments_apply,
+            generate::denoise_steady,
+            generate::denoise_voice_start,
+            generate::denoise_voice_apply,
+            generate::generate_start,
+            generate::generate_apply,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");

@@ -21,6 +21,7 @@ docs/PLAN.md    Análisis, decisiones y plan por fases
 docs/PLUGINS.md Compatibilidad con plugins y sonda de pruebas
 docs/TRANSCRIPCION.md  Medidas de transcripción, afinación e instrumentos con audio real
                        (scripts y descarga de datos en ai-worker/eval/)
+docs/GENERACION.md     Limpieza de ruido y acompañamientos con IA: método y medidas
 ```
 
 ## Desarrollo (Windows)
@@ -81,7 +82,7 @@ Crea un manifiesto TOML en `ai-worker/musicnova_ai/manifests/` (o en `%LOCALAPPD
 ```toml
 id = "mi_modelo"
 name = "Mi modelo"
-task = "separation"          # separation | chords | beats | key | lyrics | transcription | instruments | generation
+task = "separation"          # separation | chords | beats | key | lyrics | transcription | instruments | denoise | generation
 family = "demucs"
 description = "..."
 license = "MIT"

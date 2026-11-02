@@ -52,4 +52,4 @@ def register(cls: type[Task]) -> type[Task]:
 
 
 # Las tareas se registran al importar sus módulos.
-from . import analysis, drums, lyrics, mastering, separation, transcription  # noqa: E402,F401
+from . import analysis, denoise, drums, generation, lyrics, mastering, separation, transcription  # noqa: E402,F401

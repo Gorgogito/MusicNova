@@ -12,7 +12,8 @@ const TASK_LABELS: Record<string, string> = {
   lyrics: 'Letras',
   transcription: 'Audio a MIDI',
   instruments: 'Detección de instrumentos',
-  generation: 'Generación',
+  generation: 'Acompañamientos (IA generativa)',
+  denoise: 'Limpieza de ruido',
   tool: 'Herramientas',
 }
 
