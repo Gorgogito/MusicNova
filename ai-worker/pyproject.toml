@@ -54,6 +54,8 @@ transcription = [
     "soundfile>=0.12",
     "librosa>=0.10",
     "onnxruntime>=1.17",
+    # Tono de la voz con CREPE (MIT, pesos incluidos en el paquete); sin él se usa pYIN.
+    "torchcrepe>=0.0.24",
 ]
 # Master por referencia (Matchering 2.0, GPL-3.0).
 mastering = [

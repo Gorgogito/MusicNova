@@ -994,6 +994,7 @@ export function StudioView({
                   duration={duration}
                   color={kind.color}
                   notation={notation}
+                  drums={trackNotes(t.id)?.mode === 'drums'}
                   locked={recording}
                   snap={snap}
                   onSeek={seek}

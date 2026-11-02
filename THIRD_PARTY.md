@@ -13,7 +13,7 @@ compatibles.
 | Arquitectura Cnn10/Cnn14 de PANNs (reescrita con log-mel en torch) | `ai-worker/musicnova_ai/vendor/panns/` | MIT | qiuqiangkong/audioset_tagging_cnn |
 | Lista de clases de AudioSet (`class_labels_indices.csv`) | `ai-worker/musicnova_ai/vendor/panns/` | CC BY 4.0 | Google AudioSet, vía audioset_tagging_cnn |
 | Signalsmith Stretch y Signalsmith Linear (cabeceras C++) | `crates/mn-stretch/vendor/` | MIT | Signalsmith Audio, vía signalsmith-stretch-rs 0.1.3 |
-| Envoltura C de Signalsmith Stretch | `crates/mn-stretch/vendor/wrapper/` | MIT | Colin Marc (signalsmith-stretch-rs) |
+| Envoltura C de Signalsmith Stretch (con `set_formant_base` corregido) | `crates/mn-stretch/vendor/wrapper/` | MIT | Colin Marc (signalsmith-stretch-rs) |
 | Plugin VST3 de ganancia de ejemplo (solo pruebas, adaptado con estado) | `crates/mn-testplugin/src/vst3.rs` | MIT OR Apache-2.0 | Micah Johnston, vst3-rs 0.3.0 `examples/gain.rs` |
 
 Algoritmos implementados desde cero en `crates/mn-fx`: filtros del «Audio EQ Cookbook» (R. Bristow-Johnson), reverb según Freeverb (Jezar at Dreampoint, dominio público) y medición de sonoridad según ITU-R BS.1770-4 / EBU R128 (derivación de la ponderación K como en libebur128).
@@ -35,6 +35,7 @@ Algoritmos implementados desde cero en `crates/mn-fx`: filtros del «Audio EQ Co
 | SciPy, soxr, numba | Análisis musical (acordes, secciones, remuestreo) | BSD-3-Clause / LGPL-2.1 / BSD-2-Clause |
 | faster-whisper (incluye el VAD Silero), CTranslate2, tokenizers | Transcripción de letras | MIT / MIT / Apache-2.0 |
 | ONNX Runtime | VAD de faster-whisper y modelo de Basic Pitch | MIT |
+| torchcrepe (Max Morrison) con los pesos de CREPE «full» y «tiny» incluidos en el paquete (Kim et al., 2018) | Tono de la voz y curvas de tono de las notas | MIT (código y pesos) |
 | Matchering 2.0 (sergree) | Master por referencia | GPL-3.0 |
 | statsmodels, pandas, resampy | Dependencias de Matchering | BSD-3-Clause / BSD-3-Clause / ISC |
 | NVIDIA cuBLAS para CUDA 12 (`nvidia-cublas-cu12`) | Whisper en GPU (solo se instala con pip; no se incluye en el repositorio) | Licencia NVIDIA de redistribución de CUDA |
@@ -51,3 +52,14 @@ Cada una se verifica con SHA-256 y la app muestra su licencia antes de descargar
 | Beat This! final0 y small0 (CPJKU, JKU Linz) | MIT (código y pesos) | cloud.cp.jku.at |
 | Whisper large-v3, large-v3 turbo y small (OpenAI) en formato CTranslate2 | MIT | huggingface.co/Systran, huggingface.co/deepdml |
 | PANNs Cnn14 y Cnn10 (Kong et al., 2020) | CC BY 4.0 (pesos) | zenodo.org/records/3987831 |
+
+## Datos usados solo para medir (no se incluyen ni se distribuyen)
+
+Los descarga `ai-worker/eval/fetch.py` en una carpeta local para reproducir las
+medidas de `docs/TRANSCRIPCION.md`.
+
+| Conjunto | Licencia | Fuente |
+|---|---|---|
+| Vocadito (voces solistas con f0 y notas anotadas) | CC BY 4.0 | zenodo.org/records/5578807 |
+| MDB Drums (batería de 23 canciones de MedleyDB, golpes anotados) | CC BY-NC-SA 4.0 | github.com/CarlSouthall/MDBDrums |
+| IRMAS, partición de prueba (instrumentos predominantes anotados) | CC BY-NC-SA 3.0 | zenodo.org/records/1290750 |

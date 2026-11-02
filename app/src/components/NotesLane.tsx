@@ -1,7 +1,7 @@
 import { memo, useMemo, useRef, useState } from 'react'
 import type { Note, PitchCurve } from '../lib/api'
 import type { Notation } from '../lib/chords'
-import { curveMidi, isBlackKey, moveNote, noteLabel, pitchRange, resizeNote, sortNotes, voicedRuns } from '../lib/notes'
+import { curveMidi, isBlackKey, moveNote, pitchLabel, pitchRange, resizeNote, sortNotes, voicedRuns } from '../lib/notes'
 
 interface Props {
   notes: Note[]
@@ -10,6 +10,8 @@ interface Props {
   duration: number
   color: string
   notation: Notation
+  /** Notas de batería: cada fila es un instrumento, no una nota. */
+  drums?: boolean
   locked: boolean
   snap: (t: number, pxPerSec: number, free: boolean) => number
   onSeek: (t: number) => void
@@ -32,6 +34,7 @@ export const NotesLane = memo(function NotesLane({
   duration,
   color,
   notation,
+  drums = false,
   locked,
   snap,
   onSeek,
@@ -47,6 +50,8 @@ export const NotesLane = memo(function NotesLane({
   const range = useMemo(() => pitchRange(notes, midi), [notes, midi])
   const [lo, hi] = frozen ?? range
   const rows = hi - lo + 1
+  const label = (p: number) => pitchLabel(p, notation, drums)
+  const bent = notes.filter((n) => n.bends && n.bends.length > 1)
 
   const geometry = () => {
     const r = areaRef.current!.getBoundingClientRect()
@@ -88,7 +93,7 @@ export const NotesLane = memo(function NotesLane({
       }
       last = notes.map((x, i) => (i === index ? n : x))
       const r = el.getBoundingClientRect()
-      setTip({ x: ev.clientX - r.left, y: ev.clientY - r.top, text: `${noteLabel(n.pitch, notation)} · ${n.start.toFixed(2)}–${n.end.toFixed(2)} s` })
+      setTip({ x: ev.clientX - r.left, y: ev.clientY - r.top, text: `${label(n.pitch)} · ${n.start.toFixed(2)}–${n.end.toFixed(2)} s` })
       onPreview(last)
     }
     const up = () => {
@@ -159,11 +164,11 @@ export const NotesLane = memo(function NotesLane({
 
   const keyRows = []
   for (let p = hi; p >= lo; p--) {
-    if (isBlackKey(p) || p % 12 === 0) {
+    if (drums ? p % 2 === 0 : isBlackKey(p) || p % 12 === 0) {
       keyRows.push(
         <div
           key={p}
-          className={`pr-row ${isBlackKey(p) ? 'black' : 'c'}`}
+          className={`pr-row ${drums || isBlackKey(p) ? 'black' : 'c'}`}
           style={{ top: `${((hi - p) / rows) * 100}%`, height: `${100 / rows}%` }}
         />,
       )
@@ -182,8 +187,18 @@ export const NotesLane = memo(function NotesLane({
       onKeyDown={onKeyDown}
     >
       {keyRows}
-      {curve && (
+      {(curve || bent.length > 0) && (
         <svg viewBox={`0 0 ${duration} ${rows}`} preserveAspectRatio="none" aria-hidden>
+          {bent.map((n, i) => (
+            <polyline
+              key={`b${i}`}
+              className="pr-bend"
+              points={n
+                .bends!.filter(([dt]) => dt <= n.end - n.start)
+                .map(([dt, c]) => `${(n.start + dt).toFixed(3)},${(hi - n.pitch - c / 100 + 0.5).toFixed(3)}`)
+                .join(' ')}
+            />
+          ))}
           {voicedRuns(midi).map(([a, b]) => (
             <polyline
               key={a}
@@ -200,7 +215,7 @@ export const NotesLane = memo(function NotesLane({
         <div
           key={i}
           className={`pr-note ${i === selected ? 'selected' : ''}`}
-          title={`${noteLabel(n.pitch, notation)} · ${(n.end - n.start).toFixed(2)} s · vel. ${n.velocity}`}
+          title={`${label(n.pitch)} · ${(n.end - n.start).toFixed(2)} s · vel. ${n.velocity}${n.bends?.length ? ' · con curva de tono' : ''}`}
           style={{
             left: `${(n.start / duration) * 100}%`,
             width: `${((n.end - n.start) / duration) * 100}%`,
@@ -211,8 +226,8 @@ export const NotesLane = memo(function NotesLane({
           onPointerDown={(e) => onNoteDown(e, i)}
         />
       ))}
-      <span className="pr-label top">{noteLabel(hi, notation)}</span>
-      <span className="pr-label bottom">{noteLabel(lo, notation)}</span>
+      <span className="pr-label top">{label(hi)}</span>
+      <span className="pr-label bottom">{label(lo)}</span>
       {tip && (
         <span className="auto-tip" style={{ left: tip.x, top: tip.y }}>
           {tip.text}

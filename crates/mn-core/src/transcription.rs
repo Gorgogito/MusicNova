@@ -19,6 +19,13 @@ pub const TRANSCRIPTION_VERSION: u32 = 1;
 
 /// Duración mínima de una nota (s).
 pub const MIN_NOTE: f64 = 0.02;
+/// Límite de las curvas de tono (cents): ±2 semitonos, el rango estándar del
+/// pitch bend MIDI, que así suena bien aunque el sintetizador ignore el RPN.
+pub const BEND_LIMIT: f32 = 200.0;
+/// Canal MIDI de la percusión (el 10 contando desde 1).
+pub const DRUM_CHANNEL: u8 = 9;
+/// Modo de las notas de batería (alturas del mapa de percusión General MIDI).
+pub const DRUMS_MODE: &str = "drums";
 
 fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     if !path.is_file() {
@@ -44,7 +51,7 @@ fn check_version(v: u32, what: &str) -> Result<()> {
 
 // ---- Notas --------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Note {
     /// Inicio y fin en segundos de la línea de tiempo del proyecto.
     pub start: f64,
@@ -52,6 +59,48 @@ pub struct Note {
     /// Nota MIDI (60 = Do central).
     pub pitch: u8,
     pub velocity: u8,
+    /// Curva de tono dentro de la nota: puntos [segundos desde el inicio, cents]
+    /// unidos por rectas. Vacía = altura fija.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bends: Vec<[f32; 2]>,
+}
+
+impl Note {
+    pub fn new(start: f64, end: f64, pitch: u8, velocity: u8) -> Self {
+        Self { start, end, pitch, velocity, bends: Vec::new() }
+    }
+
+    /// Desvío (cents) a `dt` segundos del inicio de la nota.
+    pub fn bend_at(&self, dt: f64) -> f32 {
+        let b = &self.bends;
+        let Some(first) = b.first() else { return 0.0 };
+        let dt = dt as f32;
+        if dt <= first[0] {
+            return first[1];
+        }
+        for w in b.windows(2) {
+            if dt <= w[1][0] {
+                let span = w[1][0] - w[0][0];
+                return if span > 0.0 { w[0][1] + (w[1][1] - w[0][1]) * (dt - w[0][0]) / span } else { w[1][1] };
+            }
+        }
+        b[b.len() - 1][1]
+    }
+}
+
+/// Curva válida: puntos finitos, tiempos no negativos y ordenados, desvíos
+/// dentro de ±BEND_LIMIT. Vacía si nunca se aparta de la nota.
+fn sanitize_bends(mut b: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
+    b.retain(|p| p[0].is_finite() && p[1].is_finite());
+    for p in &mut b {
+        p[0] = p[0].max(0.0);
+        p[1] = p[1].clamp(-BEND_LIMIT, BEND_LIMIT);
+    }
+    b.sort_by(|x, y| x[0].total_cmp(&y[0]));
+    if b.iter().all(|p| p[1].abs() < 0.5) {
+        b.clear();
+    }
+    b
 }
 
 /// Notas transcritas de una pista.
@@ -85,6 +134,7 @@ pub fn sanitize_notes(notes: Vec<Note>) -> Vec<Note> {
             n.start = n.start.max(0.0);
             n.pitch = n.pitch.min(127);
             n.velocity = n.velocity.clamp(1, 127);
+            n.bends = sanitize_bends(std::mem::take(&mut n.bends));
             n
         })
         .filter(|n| n.end - n.start >= MIN_NOTE - 1e-9)
@@ -207,6 +257,9 @@ pub struct InstrumentReport {
     pub source: String,
     pub duration: f64,
     pub instruments: Vec<Instrument>,
+    /// Stems separados con los que se analizó (vacío = solo la mezcla).
+    #[serde(default)]
+    pub stems: Vec<String>,
 }
 
 impl InstrumentReport {
@@ -322,9 +375,17 @@ fn chunk(out: &mut Vec<u8>, id: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(data);
 }
 
-/// Pista MIDI a partir de eventos (pulso, bytes); los ordena y añade el final.
+// Orden de los eventos que caen en el mismo pulso.
+const EV_SETUP: u8 = 0;
+const EV_OFF: u8 = 1;
+const EV_BEND_RESET: u8 = 2;
+const EV_BEND: u8 = 3;
+const EV_ON: u8 = 4;
+
+/// Pista MIDI a partir de eventos (pulso, orden, bytes); los ordena y añade el final.
 fn track_bytes(mut events: Vec<(u64, u8, Vec<u8>)>) -> Vec<u8> {
-    // A igual pulso: primero los meta, luego los «note off», luego los «note on».
+    // A igual pulso: meta y ajustes, «note off», vuelta del bend al centro,
+    // bend inicial de la nota siguiente y por último los «note on».
     events.sort_by_key(|e| (e.0, e.1));
     let mut data = Vec::new();
     let mut last = 0u64;
@@ -351,10 +412,57 @@ pub struct MidiPart<'a> {
     /// Programa General MIDI (0 = piano).
     pub program: u8,
     pub notes: &'a [Note],
+    /// Percusión: va al canal 10 y las alturas son instrumentos del mapa GM.
+    pub drums: bool,
+}
+
+/// Valor de pitch bend de 14 bits para un desvío en cents (rango ±BEND_LIMIT).
+fn bend_value(cents: f32) -> u16 {
+    (8192.0 + cents.clamp(-BEND_LIMIT, BEND_LIMIT) / BEND_LIMIT * 8191.0).round() as u16
+}
+
+fn bend_event(ch: u8, v: u16) -> Vec<u8> {
+    vec![0xe0 | ch, (v & 0x7f) as u8, (v >> 7) as u8]
+}
+
+/// Canal de cada nota de una parte. El pitch bend afecta a todo el canal, así
+/// que una nota con curva necesita uno para ella sola mientras suena: se toma
+/// el canal propio de la parte si está libre y si no uno de reserva. Sin
+/// canales libres la nota pierde la curva (`false`).
+fn assign_channels(notes: &[Note], tempo: &TempoMap, own: &mut Vec<u8>, spare: &mut Vec<u8>) -> Vec<(u8, bool)> {
+    // (canal, pulso final, con curva) de lo que suena.
+    let mut busy: Vec<(u8, u64, bool)> = Vec::new();
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by(|&a, &b| notes[a].start.total_cmp(&notes[b].start));
+    let mut out = vec![(own[0], false); notes.len()];
+    for i in order {
+        let n = &notes[i];
+        let (a, b) = (tempo.ticks(n.start), tempo.ticks(n.end).max(tempo.ticks(n.start) + 1));
+        busy.retain(|&(_, end, _)| end > a);
+        let bent = !n.bends.is_empty();
+        let free = |ch: u8, busy: &[(u8, u64, bool)]| busy.iter().filter(|x| x.0 == ch).all(|x| !bent && !x.2);
+        let ch = match own.iter().copied().find(|&c| free(c, &busy)) {
+            Some(c) => Some(c),
+            None => spare.pop().inspect(|&c| own.push(c)),
+        };
+        let (ch, keep) = match ch {
+            Some(c) => (c, bent),
+            // Sin canal libre: la nota va sin curva en un canal donde no haya
+            // otra con curva sonando, o en el propio si no queda otro remedio.
+            None => {
+                (own.iter().copied().find(|&c| busy.iter().filter(|x| x.0 == c).all(|x| !x.2)).unwrap_or(own[0]), false)
+            }
+        };
+        busy.push((ch, b, keep));
+        out[i] = (ch, keep);
+    }
+    out
 }
 
 /// Archivo MIDI estándar de formato 1: una pista de tempo y una por parte, cada
-/// una en su canal (se salta el 10, reservado a la percusión).
+/// una en su canal (el 10 queda para la percusión). Las notas con curva de tono
+/// llevan pitch bend (rango de ±2 semitonos fijado con RPN 0) y, si se solapan,
+/// se reparten entre canales libres.
 pub fn write_midi(parts: &[MidiPart], tempo: &TempoMap, beats_per_bar: u32, title: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut header = Vec::new();
@@ -363,25 +471,68 @@ pub fn write_midi(parts: &[MidiPart], tempo: &TempoMap, beats_per_bar: u32, titl
     header.extend_from_slice(&(PPQ as u16).to_be_bytes());
     chunk(&mut out, b"MThd", &header);
 
-    let mut meta = vec![(0u64, 0u8, meta_text(0x03, title))];
+    let mut meta = vec![(0u64, EV_SETUP, meta_text(0x03, title))];
     let num = beats_per_bar.clamp(1, 32) as u8;
-    meta.push((0, 0, vec![0xff, 0x58, 0x04, num, 2, 24, 8]));
+    meta.push((0, EV_SETUP, vec![0xff, 0x58, 0x04, num, 2, 24, 8]));
     for (tick, us) in tempo.tempo_events() {
-        meta.push((tick, 0, vec![0xff, 0x51, 0x03, (us >> 16) as u8, (us >> 8) as u8, us as u8]));
+        meta.push((tick, EV_SETUP, vec![0xff, 0x51, 0x03, (us >> 16) as u8, (us >> 8) as u8, us as u8]));
     }
     chunk(&mut out, b"MTrk", &track_bytes(meta));
 
+    // Canal propio de cada parte melódica (se salta el 10); los que sobran
+    // quedan de reserva para notas con curva que se solapan.
+    let melodic: Vec<usize> = (0..parts.len()).filter(|&i| !parts[i].drums).collect();
+    let mut own_channel = vec![DRUM_CHANNEL; parts.len()];
+    for (k, &i) in melodic.iter().enumerate() {
+        let c = (k % 15) as u8;
+        own_channel[i] = if c >= DRUM_CHANNEL { c + 1 } else { c };
+    }
+    let mut spare: Vec<u8> = (0..16u8).rev().filter(|c| *c != DRUM_CHANNEL && !own_channel.contains(c)).collect();
+
     for (i, part) in parts.iter().enumerate() {
-        let ch = {
-            let c = (i % 15) as u8;
-            if c >= 9 { c + 1 } else { c }
+        let mut ev = vec![(0u64, EV_SETUP, meta_text(0x03, part.name))];
+        let mut channels = vec![own_channel[i]];
+        let assigned = if part.drums {
+            vec![(DRUM_CHANNEL, false); part.notes.len()]
+        } else {
+            assign_channels(part.notes, tempo, &mut channels, &mut spare)
         };
-        let mut ev = vec![(0u64, 0u8, meta_text(0x03, part.name)), (0, 0, vec![0xc0 | ch, part.program.min(127)])];
-        for n in part.notes {
+        let any_bends = assigned.iter().any(|a| a.1);
+        for &ch in &channels {
+            if !part.drums {
+                ev.push((0, EV_SETUP, vec![0xc0 | ch, part.program.min(127)]));
+            }
+            if any_bends {
+                // RPN 0 (sensibilidad del pitch bend) = 2 semitonos, y RPN nulo.
+                let semis = (BEND_LIMIT / 100.0) as u8;
+                for (cc, v) in [(101, 0), (100, 0), (6, semis), (38, 0), (101, 127), (100, 127)] {
+                    ev.push((0, EV_SETUP, vec![0xb0 | ch, cc, v]));
+                }
+            }
+        }
+        for (n, &(ch, bent)) in part.notes.iter().zip(&assigned) {
             let (a, b) = (tempo.ticks(n.start), tempo.ticks(n.end));
             let b = b.max(a + 1);
-            ev.push((a, 2, vec![0x90 | ch, n.pitch.min(127), n.velocity.clamp(1, 127)]));
-            ev.push((b, 1, vec![0x80 | ch, n.pitch.min(127), 0]));
+            if bent {
+                // La curva se muestrea cada 10 ms y solo se escribe cuando cambia.
+                let mut last = None;
+                let steps = ((n.end - n.start) / 0.01).ceil().max(1.0) as usize;
+                for k in 0..steps {
+                    let dt = k as f64 * 0.01;
+                    let tick = tempo.ticks(n.start + dt);
+                    if k > 0 && tick >= b {
+                        break;
+                    }
+                    let v = bend_value(n.bend_at(dt));
+                    if last != Some(v) {
+                        ev.push((tick.max(a), EV_BEND, bend_event(ch, v)));
+                        last = Some(v);
+                    }
+                }
+                ev.push((b, EV_BEND_RESET, bend_event(ch, 8192)));
+            }
+            ev.push((a, EV_ON, vec![0x90 | ch, n.pitch.min(127), n.velocity.clamp(1, 127)]));
+            ev.push((b, EV_OFF, vec![0x80 | ch, n.pitch.min(127), 0]));
         }
         chunk(&mut out, b"MTrk", &track_bytes(ev));
     }
@@ -400,6 +551,66 @@ pub enum Timbre {
     Bass,
     /// Sostenido, para voces y melodías.
     Lead,
+    /// Batería: cada altura es un instrumento del mapa de percusión General MIDI.
+    Drums,
+}
+
+/// Ruido blanco reproducible (xorshift32) en [−1, 1).
+struct Noise(u32);
+
+impl Noise {
+    fn next(&mut self) -> f32 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.0 = x;
+        (x as f32 / u32::MAX as f32) * 2.0 - 1.0
+    }
+}
+
+/// Un golpe de batería sintético para la altura GM `pitch` (bombo, caja,
+/// charles, toms, platos), añadido a `out` desde la muestra `at`.
+fn drum_hit(out: &mut [f32], at: usize, pitch: u8, gain: f32, sr: f32, noise: &mut Noise) {
+    use std::f32::consts::TAU;
+    // (duración s, tono inicial Hz, tono final Hz, mezcla de ruido 0–1, paso alto del ruido)
+    let (len, f_hi, f_lo, mix, bright) = match pitch {
+        35 | 36 => (0.35, 160.0, 48.0, 0.04, false),
+        37 => (0.06, 900.0, 900.0, 0.5, true),
+        38 | 40 => (0.2, 220.0, 170.0, 0.65, false),
+        39 => (0.15, 1200.0, 1200.0, 0.9, true),
+        41 | 43 => (0.35, 110.0, 80.0, 0.1, false),
+        45 | 47 => (0.3, 150.0, 115.0, 0.1, false),
+        48 | 50 => (0.25, 200.0, 160.0, 0.1, false),
+        42 | 44 => (0.05, 0.0, 0.0, 1.0, true),
+        46 => (0.3, 0.0, 0.0, 1.0, true),
+        49 | 52 | 55 | 57 => (1.2, 0.0, 0.0, 1.0, true),
+        51 | 53 | 59 => (0.6, 3200.0, 3200.0, 0.85, true),
+        _ => (0.12, 600.0, 600.0, 0.6, true),
+    };
+    let n = (len * sr) as usize;
+    let mut phase = 0.0f32;
+    let mut prev = 0.0f32;
+    for k in 0..n {
+        let i = at + k;
+        if i >= out.len() {
+            break;
+        }
+        let t = k as f32 / sr;
+        let env = (-t * 5.0 / len).exp() * (k as f32 / (0.001 * sr)).min(1.0);
+        let f = f_lo + (f_hi - f_lo) * (-t * 30.0).exp();
+        phase += f / sr;
+        let tone = if f > 0.0 { (TAU * phase).sin() } else { 0.0 };
+        let w = noise.next();
+        let nz = if bright {
+            let hp = w - prev;
+            prev = w;
+            hp * 0.7
+        } else {
+            w
+        };
+        out[i] += gain * env * ((1.0 - mix) * tone + mix * nz);
+    }
 }
 
 /// Sintetiza las notas en estéreo a `rate`, con la duración `length` (s) o la
@@ -413,10 +624,20 @@ pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre
         Timbre::Keys => &[1.0, 0.45, 0.25, 0.12, 0.06],
         Timbre::Bass => &[1.0, 0.35, 0.08],
         Timbre::Lead => &[1.0, 0.5, 0.33, 0.25, 0.2, 0.16],
+        Timbre::Drums => &[],
     };
     let sr = rate as f32;
-    for n in notes {
+    if timbre == Timbre::Drums {
+        let mut noise = Noise(0x9e37_79b9);
+        for n in notes {
+            let gain = 0.5 * (n.velocity as f32 / 127.0).powf(1.5);
+            drum_hit(&mut mono, (n.start * rate as f64) as usize, n.pitch, gain, sr, &mut noise);
+        }
+    }
+    for n in notes.iter().filter(|_| timbre != Timbre::Drums) {
         let f0 = 440.0 * 2f32.powf((n.pitch as f32 - 69.0) / 12.0);
+        let mut phase = 0.0f64;
+        let mut ratio = 1.0f32;
         let amp = 0.18 * (n.velocity as f32 / 127.0).powf(1.5);
         let a = (n.start * rate as f64) as usize;
         let hold = ((n.end - n.start) * rate as f64) as usize;
@@ -433,17 +654,25 @@ pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre
                 Timbre::Keys => (-t * 2.2).exp(),
                 Timbre::Bass => (-t * 1.2).exp(),
                 Timbre::Lead => 0.85 + 0.15 * (-t * 6.0).exp(),
+                Timbre::Drums => 0.0,
             };
             if k >= hold {
                 env *= 1.0 - (k - hold) as f32 / (total - hold).max(1) as f32;
             }
+            // La curva de tono se evalúa cada 32 muestras; la fase se acumula
+            // para que los cambios de frecuencia no produzcan saltos.
+            if !n.bends.is_empty() && k % 32 == 0 {
+                ratio = 2f32.powf(n.bend_at(t as f64) / 1200.0);
+            }
+            phase += (f0 * ratio / sr) as f64;
+            let ph = (phase.fract() as f32) * std::f32::consts::TAU;
             let mut s = 0.0;
             for (h, &w) in harmonics.iter().enumerate() {
-                let f = f0 * (h + 1) as f32;
+                let f = f0 * ratio * (h + 1) as f32;
                 if f >= sr * 0.45 {
                     break;
                 }
-                s += w * (std::f32::consts::TAU * f * t).sin();
+                s += w * (ph * (h + 1) as f32).sin();
             }
             mono[i] += amp * env * s;
         }
@@ -462,7 +691,7 @@ mod tests {
     use super::*;
 
     fn note(start: f64, end: f64, pitch: u8) -> Note {
-        Note { start, end, pitch, velocity: 100 }
+        Note::new(start, end, pitch, 100)
     }
 
     /// El JSON tal como lo escribe el proceso de IA (con campos que aquí no se usan).
@@ -471,9 +700,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mn_tx_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("analysis")).unwrap();
         let notes = dir.join("notes.json");
-        std::fs::write(&notes, r#"{"version":1,"source":"basic_pitch","mode":"mono","notes":[{"start":0.5,"end":1.0,"pitch":60,"velocity":98}],"seconds":0.2}"#).unwrap();
+        std::fs::write(&notes, r#"{"version":1,"source":"basic_pitch","mode":"mono","bends":"crepe","notes":[{"start":0.5,"end":1.0,"pitch":60,"velocity":98,"bends":[[0.0,12.5],[0.25,-30.0]]}],"seconds":0.2}"#).unwrap();
         let r = NotesResult::load(&notes).unwrap();
         assert_eq!((r.mode.as_str(), r.notes[0].pitch, r.notes[0].velocity), ("mono", 60, 98));
+        assert_eq!(r.notes[0].bends, vec![[0.0, 12.5], [0.25, -30.0]]);
+        let drums = dir.join("drums.json");
+        std::fs::write(&drums, r#"{"version":1,"source":"nmf_drums","mode":"drums","notes":[{"start":0.1,"end":0.2,"pitch":36,"velocity":100}],"seconds":0.1}"#).unwrap();
+        assert_eq!(NotesResult::load(&drums).unwrap().mode, DRUMS_MODE);
 
         std::fs::write(dir.join(PITCH_FILE), r#"{"version":1,"source":"pyin","hop":0.01,"f0":[0.0,440.0,0.0],"confidence":[0.0,0.9,0.1],"seconds":1.2}"#).unwrap();
         let c = PitchCurve::load(&dir).unwrap().unwrap();
@@ -502,7 +735,7 @@ mod tests {
             note(1.0, 1.5, 64),
             note(-0.5, 0.2, 200),
             note(0.5, 0.505, 60),
-            Note { start: f64::NAN, end: 1.0, pitch: 60, velocity: 1 },
+            Note::new(f64::NAN, 1.0, 60, 1),
         ]);
         assert_eq!(notes.len(), 2);
         assert_eq!((notes[0].start, notes[0].pitch), (0.0, 127));
@@ -559,7 +792,7 @@ mod tests {
                 let status = data[i];
                 let n = match status {
                     0xff => 3 + data[i + 2] as usize,
-                    s if s & 0xf0 == 0xc0 => 2,
+                    s if s & 0xf0 == 0xc0 || s & 0xf0 == 0xd0 => 2,
                     _ => 3,
                 };
                 events.push((tick, data[i..i + n].to_vec()));
@@ -575,8 +808,8 @@ mod tests {
         let notes = [note(0.0, 0.5, 60), note(0.5, 1.0, 64), note(0.5, 1.0, 67)];
         let bass = [note(0.0, 1.0, 36)];
         let parts = [
-            MidiPart { name: "Piano", program: 0, notes: &notes },
-            MidiPart { name: "Bajo", program: 33, notes: &bass },
+            MidiPart { name: "Piano", program: 0, notes: &notes, drums: false },
+            MidiPart { name: "Bajo", program: 33, notes: &bass, drums: false },
         ];
         let bytes = write_midi(&parts, &TempoMap::constant(120.0), 4, "Canción");
         let (n, tracks) = parse(&bytes);
@@ -597,12 +830,124 @@ mod tests {
         assert_eq!(tracks[2].last().unwrap().1, vec![0xff, 0x2f, 0x00]);
     }
 
+    fn bent(start: f64, end: f64, pitch: u8, bends: &[[f32; 2]]) -> Note {
+        Note { bends: bends.to_vec(), ..note(start, end, pitch) }
+    }
+
+    /// Valor de 14 bits de un evento de pitch bend.
+    fn bend_of(e: &[u8]) -> u16 {
+        e[1] as u16 | (e[2] as u16) << 7
+    }
+
+    #[test]
+    fn bend_curve_interpolates_and_sanitizes() {
+        let n = bent(1.0, 2.0, 60, &[[0.0, 0.0], [0.5, 100.0], [1.0, -50.0]]);
+        assert_eq!(n.bend_at(-1.0), 0.0);
+        assert!((n.bend_at(0.25) - 50.0).abs() < 1e-4);
+        assert!((n.bend_at(0.75) - 25.0).abs() < 1e-4);
+        assert_eq!(n.bend_at(5.0), -50.0);
+        let s = sanitize_notes(vec![
+            bent(0.0, 1.0, 60, &[[0.5, 900.0], [f32::NAN, 0.0], [-1.0, 10.0]]),
+            bent(1.0, 2.0, 62, &[[0.0, 0.2]]),
+        ]);
+        assert_eq!(s[0].bends, vec![[0.0, 10.0], [0.5, BEND_LIMIT]]);
+        assert!(s[1].bends.is_empty(), "una curva que no se mueve se descarta");
+        // Sin curva no se escribe el campo en el JSON (compatible con lo anterior).
+        assert!(!serde_json::to_string(&s[1]).unwrap().contains("bends"));
+    }
+
+    #[test]
+    fn writes_pitch_bends() {
+        // Una subida lineal de 0 a +100 cents en medio segundo.
+        let notes = [bent(0.0, 0.5, 60, &[[0.0, 0.0], [0.5, 100.0]]), note(0.5, 1.0, 62)];
+        let parts = [MidiPart { name: "Voz", program: 53, notes: &notes, drums: false }];
+        let (_, tracks) = parse(&write_midi(&parts, &TempoMap::constant(120.0), 4, "x"));
+        let t = &tracks[1];
+        // RPN 0 = 2 semitonos antes de cualquier nota.
+        let rpn: Vec<_> = t.iter().filter(|(_, e)| e[0] == 0xb0).map(|(_, e)| (e[1], e[2])).collect();
+        assert_eq!(rpn, vec![(101, 0), (100, 0), (6, 2), (38, 0), (101, 127), (100, 127)]);
+        let bends: Vec<_> = t.iter().filter(|(_, e)| e[0] == 0xe0).collect();
+        // Empieza centrado antes del «note on», sube y vuelve al centro al acabar la nota.
+        assert_eq!(bend_of(&bends[0].1), 8192);
+        let on = t.iter().position(|(_, e)| e[0] == 0x90).unwrap();
+        assert!(t.iter().position(|(_, e)| e[0] == 0xe0).unwrap() < on);
+        let peak = bends.iter().map(|(_, e)| bend_of(e)).max().unwrap();
+        assert!((peak as i32 - (8192 + 8191 / 2)).abs() < 200, "{peak}");
+        let reset = bends.last().unwrap();
+        assert_eq!((reset.0, bend_of(&reset.1)), (480, 8192));
+        // La vuelta al centro va antes del «note on» siguiente en el mismo pulso.
+        let next_on = t.iter().position(|(tk, e)| *tk == 480 && e[0] == 0x90).unwrap();
+        let reset_pos = t.iter().rposition(|(_, e)| e[0] == 0xe0).unwrap();
+        assert!(reset_pos < next_on);
+        assert!(bends.windows(2).all(|w| w[0].0 <= w[1].0));
+    }
+
+    #[test]
+    fn overlapping_bent_notes_get_their_own_channels() {
+        // Acorde de tres notas: dos con curva distinta y una fija.
+        let notes = [
+            bent(0.0, 1.0, 60, &[[0.0, 0.0], [1.0, 50.0]]),
+            bent(0.0, 1.0, 64, &[[0.0, 0.0], [1.0, -50.0]]),
+            note(0.0, 1.0, 67),
+        ];
+        let drums = [note(0.0, 0.1, 36), note(0.5, 0.6, 38)];
+        let parts = [
+            MidiPart { name: "Guitarra", program: 25, notes: &notes, drums: false },
+            MidiPart { name: "Batería", program: 0, notes: &drums, drums: true },
+        ];
+        let (_, tracks) = parse(&write_midi(&parts, &TempoMap::constant(120.0), 4, "x"));
+        let ch_of =
+            |pitch: u8| tracks[1].iter().find(|(_, e)| e[0] & 0xf0 == 0x90 && e[1] == pitch).unwrap().1[0] & 0x0f;
+        let (a, b, c) = (ch_of(60), ch_of(64), ch_of(67));
+        assert!(a != b && a != c && b != c, "{a} {b} {c}");
+        assert!(![a, b, c].contains(&DRUM_CHANNEL));
+        // Cada canal usado lleva el programa de la parte.
+        for ch in [a, b, c] {
+            assert!(tracks[1].iter().any(|(_, e)| e == &vec![0xc0 | ch, 25]));
+        }
+        // La batería, en el canal 10 sin cambio de programa.
+        assert!(tracks[2].iter().filter(|(_, e)| e[0] & 0xf0 == 0x90).all(|(_, e)| e[0] == 0x99));
+        assert!(!tracks[2].iter().any(|(_, e)| e[0] & 0xf0 == 0xc0));
+    }
+
+    #[test]
+    fn synthesizes_bends_and_drums() {
+        let rate = 48_000;
+        // Nota de La4 que salta un semitono hacia arriba a mitad.
+        let n = bent(0.0, 1.0, 69, &[[0.0, 0.0], [0.5, 0.0], [0.501, 100.0], [1.0, 100.0]]);
+        let buf = synthesize(&[n], rate, Some(1.2), Timbre::Bass);
+        let left: Vec<f32> = buf.data.as_chunks::<2>().0.iter().map(|f| f[0]).collect();
+        let hz = |a: f64, b: f64| {
+            let seg = &left[(a * rate as f64) as usize..(b * rate as f64) as usize];
+            seg.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (b - a)
+        };
+        assert!((hz(0.1, 0.45) - 440.0).abs() < 8.0);
+        assert!((hz(0.6, 0.95) - 466.16).abs() < 8.0, "{}", hz(0.6, 0.95));
+
+        let drums = synthesize(&[note(0.1, 0.2, 36), note(0.5, 0.6, 42)], rate, Some(1.0), Timbre::Drums);
+        let l: Vec<f32> = drums.data.as_chunks::<2>().0.iter().map(|f| f[0]).collect();
+        let rms = |a: f64, b: f64| {
+            let s = &l[(a * rate as f64) as usize..(b * rate as f64) as usize];
+            (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+        };
+        assert_eq!(rms(0.0, 0.09), 0.0);
+        assert!(rms(0.1, 0.15) > 0.05 && rms(0.5, 0.53) > 0.01);
+        // El bombo es grave y el charles agudo: cruces por cero muy distintos.
+        let zc = |a: f64, b: f64| {
+            l[(a * rate as f64) as usize..(b * rate as f64) as usize]
+                .windows(2)
+                .filter(|w| w[0].signum() != w[1].signum())
+                .count()
+        };
+        assert!(zc(0.5, 0.53) > 10 * zc(0.1, 0.13), "{} {}", zc(0.5, 0.53), zc(0.1, 0.13));
+    }
+
     #[test]
     fn synthesizes_the_right_pitch() {
         let rate = 48_000;
         let buf = synthesize(&[note(0.1, 0.6, 69)], rate, Some(1.0), Timbre::Bass);
         assert_eq!(buf.frames(), rate as usize);
-        let left: Vec<f32> = buf.data.chunks_exact(2).map(|f| f[0]).collect();
+        let left: Vec<f32> = buf.data.as_chunks::<2>().0.iter().map(|f| f[0]).collect();
         assert!(left[..rate as usize / 20].iter().all(|&s| s == 0.0), "silencio antes de la nota");
         // Frecuencia fundamental por cruces por cero ascendentes en el tramo sostenido.
         let seg = &left[(0.2 * rate as f64) as usize..(0.5 * rate as f64) as usize];

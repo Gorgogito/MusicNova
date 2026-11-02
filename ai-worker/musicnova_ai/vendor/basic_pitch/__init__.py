@@ -21,7 +21,9 @@ Cambios de MusicNova (permitidos por la licencia Apache-2.0, sección 4):
 - solo se usa el modelo ONNX (onnxruntime), sin TensorFlow, CoreML ni TFLite;
 - el audio llega ya cargado a 22 050 Hz y la inferencia admite avance y cancelación;
 - se quitan pretty_midi, mir_eval y resampy (la exportación MIDI la hace la aplicación);
-- las conversiones Hz/MIDI/tiempo se hacen con numpy en lugar de librosa.
+- las conversiones Hz/MIDI/tiempo se hacen con numpy en lugar de librosa;
+- la curva de tono de cada nota se interpola entre intervalos del contorno y se
+  corrige el desvío de un intervalo entre la nota y su contorno.
 """
 
 from __future__ import annotations
@@ -262,11 +264,14 @@ def output_to_notes_polyphonic(
 
 
 def midi_pitch_to_contour_bin(pitch_midi: int) -> float:
-    return 12.0 * CONTOURS_BINS_PER_SEMITONE * np.log2(_midi_to_hz(pitch_midi) / ANNOTATIONS_BASE_FREQUENCY)
+    # MusicNova: el contorno del modelo coloca la nota MIDI p en el intervalo
+    # 3·(p − 21) + 1 (medido con tonos puros de Do2 a La6: +33,6 cents de
+    # desvío constante con la fórmula original, que no suma el 1).
+    return 12.0 * CONTOURS_BINS_PER_SEMITONE * np.log2(_midi_to_hz(pitch_midi) / ANNOTATIONS_BASE_FREQUENCY) + 1
 
 
 def get_pitch_bends(contours: np.ndarray, note_events, n_bins_tolerance: int = 25):
-    """Curva de cada nota en tercios de semitono respecto a su altura nominal."""
+    """Curva de cada nota en tercios de semitono (con decimales) respecto a su altura nominal."""
     window_length = n_bins_tolerance * 2 + 1
     freq_gaussian = scipy.signal.windows.gaussian(window_length, std=5)
     out = []
@@ -278,8 +283,17 @@ def get_pitch_bends(contours: np.ndarray, note_events, n_bins_tolerance: int = 2
             max(0, n_bins_tolerance - freq_idx) : window_length - max(0, freq_idx - (N_FREQ_BINS_CONTOURS - n_bins_tolerance - 1))
         ]
         pb_shift = n_bins_tolerance - max(0, n_bins_tolerance - freq_idx)
-        bends = list(np.argmax(sub, axis=1) - pb_shift)
-        out.append((start_idx, end_idx, pitch_midi, amplitude, [int(b) for b in bends]))
+        # MusicNova: interpolación parabólica alrededor del máximo para no
+        # quedarse en pasos de un tercio de semitono.
+        peak = np.argmax(sub, axis=1)
+        rows = np.arange(len(peak))
+        left = sub[rows, np.maximum(peak - 1, 0)]
+        mid = sub[rows, peak]
+        right = sub[rows, np.minimum(peak + 1, sub.shape[1] - 1)]
+        den = left - 2 * mid + right
+        frac = np.where(np.abs(den) > 1e-9, 0.5 * (left - right) / np.where(np.abs(den) > 1e-9, den, 1.0), 0.0)
+        bends = peak + np.clip(frac, -0.5, 0.5) - pb_shift
+        out.append((start_idx, end_idx, pitch_midi, amplitude, [float(b) for b in bends]))
     return out
 
 
@@ -294,8 +308,8 @@ def predict_notes(
     melodia_trick: bool = True,
     progress: Optional[Callable[[float], None]] = None,
     check: Optional[Callable[[], None]] = None,
-) -> list[tuple[float, float, int, float, list[int]]]:
-    """Notas (inicio s, fin s, nota MIDI, amplitud 0–1, curva en tercios de semitono)."""
+) -> list[tuple[float, float, int, float, list[tuple[float, float]]]]:
+    """Notas (inicio s, fin s, nota MIDI, amplitud 0–1, curva [(instante s, tercios de semitono)])."""
     output = run_inference(audio, model, progress)
     if check:
         check()
@@ -314,4 +328,8 @@ def predict_notes(
     )
     with_bends = get_pitch_bends(output["contour"], notes)
     times = model_frames_to_time(output["contour"].shape[0])
-    return [(float(times[s]), float(times[min(e, len(times) - 1)]), p, a, b) for s, e, p, a, b in with_bends]
+    return [
+        (float(times[s]), float(times[min(e, len(times) - 1)]), p, a, [(float(times[min(s + k, len(times) - 1)]), v) for k, v in enumerate(b)])
+        for s, e, p, a, b in with_bends
+    ]
+

@@ -12,7 +12,7 @@ use mn_core::mix::render_track;
 use mn_core::project::{clip_frames, TrackInfo, TrackKind};
 use mn_core::transcription::{
     synthesize, write_midi, InstrumentReport, MidiPart, Note, NotesResult, PitchCurve, TempoMap, Timbre, TrackNotes,
-    Transcription,
+    Transcription, DRUMS_MODE,
 };
 use mn_core::tuning::{tune, TuneSettings};
 use serde_json::{json, Value};
@@ -26,6 +26,7 @@ pub const MIDI_DIR: &str = "audio/midi/";
 pub const TUNED_DIR: &str = "audio/tuned/";
 
 const NOTES_RATE: u32 = 22_050;
+const DRUMS_RATE: u32 = 44_100;
 const PITCH_RATE: u32 = 16_000;
 const INSTRUMENTS_RATE: u32 = 32_000;
 
@@ -69,7 +70,8 @@ fn notes_result_path(dir: &Path, track_id: Uuid) -> PathBuf {
 
 // ---- Audio a MIDI -------------------------------------------------------------------
 
-/// Lanza la transcripción de una pista a notas.
+/// Lanza la transcripción de una pista a notas: «poly», «mono» o «drums»
+/// (bombo, caja y charles como percusión General MIDI).
 #[tauri::command]
 pub async fn notes_start(
     app: AppHandle,
@@ -78,17 +80,28 @@ pub async fn notes_start(
     sensitivity: Option<f64>,
     device: Option<String>,
 ) -> Result<Value, String> {
-    let input = write_track_input(&app, track_id, format!("notes_input_{track_id}.wav"), NOTES_RATE).await?;
+    let drums = mode == DRUMS_MODE;
+    let rate = if drums { DRUMS_RATE } else { NOTES_RATE };
+    let input = write_track_input(&app, track_id, format!("notes_input_{track_id}.wav"), rate).await?;
     let state = app.state::<AppState>();
     let (dir, _) = session_snapshot(&state)?;
-    // Sensibilidad 0–1 (0,5 = valores por defecto de Basic Pitch): más alta, más notas.
+    // Sensibilidad 0–1 (0,5 = valores ajustados): más alta, más notas.
     let s = sensitivity.unwrap_or(0.5).clamp(0.0, 1.0);
+    if drums {
+        let params = json!({ "input": input, "output": notes_result_path(&dir, track_id), "sensitivity": s });
+        return state.worker.clone().call("tasks.run", json!({ "task": "transcribe_drums", "params": params })).await;
+    }
+    // Umbrales de Basic Pitch. En monofónico (voz, bajo, melodías) piden un
+    // inicio más claro: con voces reales de Vocadito el F1 de notas sube del
+    // 47 % (0,5 / 0,3, los de Basic Pitch) al 54 % (0,8 / 0,25).
+    let mono = mode == "mono";
+    let (onset, frame) = if mono { (0.95 - 0.3 * s, 0.35 - 0.2 * s) } else { (0.7 - 0.4 * s, 0.45 - 0.3 * s) };
     let params = json!({
         "input": input,
         "output": notes_result_path(&dir, track_id),
-        "mode": if mode == "mono" { "mono" } else { "poly" },
-        "onset_threshold": 0.7 - 0.4 * s,
-        "frame_threshold": 0.45 - 0.3 * s,
+        "mode": if mono { "mono" } else { "poly" },
+        "onset_threshold": onset,
+        "frame_threshold": frame,
         "device": device.unwrap_or_else(|| "auto".into()),
     });
     state.worker.clone().call("tasks.run", json!({ "task": "transcribe_notes", "params": params })).await
@@ -155,19 +168,20 @@ pub fn notes_export_midi(state: State<'_, AppState>, path: String, track_id: Opt
         }
         _ => (TempoMap::constant(project.practice.bpm), project.practice.beats_per_bar),
     };
-    let parts: Vec<(String, u8, &[Note])> = t
+    let parts: Vec<(String, u8, &[Note], bool)> = t
         .tracks
         .iter()
         .filter(|tn| track_id.is_none_or(|id| id == tn.track_id) && !tn.notes.is_empty())
         .filter_map(|tn| {
             let info = project.tracks.iter().find(|x| x.id == tn.track_id)?;
-            Some((info.name.clone(), gm_program(info.kind), tn.notes.as_slice()))
+            Some((info.name.clone(), gm_program(info.kind), tn.notes.as_slice(), tn.mode == DRUMS_MODE))
         })
         .collect();
     if parts.is_empty() {
         return Err("no hay notas que exportar".into());
     }
-    let parts: Vec<MidiPart> = parts.iter().map(|(n, p, notes)| MidiPart { name: n, program: *p, notes }).collect();
+    let parts: Vec<MidiPart> =
+        parts.iter().map(|(n, p, notes, drums)| MidiPart { name: n, program: *p, notes, drums: *drums }).collect();
     let bytes = write_midi(&parts, &tempo, bpb, &project.name);
     let path = Path::new(&path).with_extension("mid");
     std::fs::write(&path, bytes).map_err(err)?;
@@ -204,6 +218,7 @@ pub async fn notes_render(app: AppHandle, track_id: Uuid) -> Result<ProjectView,
         let tn = t.track(track_id).ok_or("esta pista no tiene notas")?;
         let info = project.tracks.iter().find(|x| x.id == track_id).ok_or("pista desconocida")?;
         let timbre = match info.kind {
+            _ if tn.mode == DRUMS_MODE => Timbre::Drums,
             TrackKind::Bass => Timbre::Bass,
             TrackKind::Vocals | TrackKind::BackingVocals => Timbre::Lead,
             _ => Timbre::Keys,
@@ -223,11 +238,23 @@ pub async fn notes_render(app: AppHandle, track_id: Uuid) -> Result<ProjectView,
 
 /// Lanza el seguimiento del tono de una pista de voz.
 #[tauri::command]
-pub async fn pitch_start(app: AppHandle, track_id: Uuid) -> Result<Value, String> {
+pub async fn pitch_start(app: AppHandle, track_id: Uuid, engine: Option<String>) -> Result<Value, String> {
+    // «crepe-full» (preciso), «crepe-tiny» (rápido), «pyin» (sin red neuronal) o automático.
+    let (engine, model) = match engine.as_deref() {
+        Some("crepe-full") | None => ("auto", "full"),
+        Some("crepe-tiny") => ("crepe", "tiny"),
+        Some("pyin") => ("pyin", "full"),
+        Some(other) => return Err(format!("motor de tono desconocido: {other}")),
+    };
     let input = write_track_input(&app, track_id, "pitch_input.wav".into(), PITCH_RATE).await?;
     let state = app.state::<AppState>();
     let (dir, _) = session_snapshot(&state)?;
-    let params = json!({ "input": input, "output": dir.join("cache").join(format!("pitch_{track_id}.json")) });
+    let params = json!({
+        "input": input,
+        "output": dir.join("cache").join(format!("pitch_{track_id}.json")),
+        "engine": engine,
+        "model": model,
+    });
     state.worker.clone().call("tasks.run", json!({ "task": "track_pitch", "params": params })).await
 }
 
@@ -271,10 +298,36 @@ pub async fn instruments_start(app: AppHandle, model_id: Option<String>, device:
     let state = app.state::<AppState>();
     let (dir, project) = session_snapshot(&state)?;
     let input = write_mix_input(&dir, &project, "instruments_input.wav", INSTRUMENTS_RATE).await?;
+    // Con stems separados cada instrumento se busca en el suyo (la voz en el de
+    // voz, el piano en el de piano o en «otros»…): detecta bastante más que la mezcla.
+    let mut stems = serde_json::Map::new();
+    for (kind, name) in [
+        (TrackKind::Vocals, "vocals"),
+        (TrackKind::Drums, "drums"),
+        (TrackKind::Bass, "bass"),
+        (TrackKind::Guitar, "guitar"),
+        (TrackKind::Piano, "piano"),
+        (TrackKind::Other, "other"),
+    ] {
+        let Some(track) = project.tracks.iter().find(|t| t.kind == kind) else {
+            continue;
+        };
+        let src = project.track_path(&dir, track);
+        let dst = dir.join("cache").join(format!("instruments_{name}.wav"));
+        let path = dst.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let buf = audio::resample(&audio::decode_file(&src).map_err(err)?, INSTRUMENTS_RATE).map_err(err)?;
+            audio::write_wav_f32(&path, &buf).map_err(err)
+        })
+        .await
+        .map_err(err)??;
+        stems.insert(name.into(), json!(dst));
+    }
     let mut params = json!({
         "input": input,
         "output": InstrumentReport::path(&dir),
         "device": device.unwrap_or_else(|| "auto".into()),
+        "stems": stems,
     });
     if let Some(m) = model_id {
         params["model_id"] = json!(m);

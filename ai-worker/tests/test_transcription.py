@@ -22,6 +22,7 @@ from musicnova_ai.tasks.transcription import (
     InstrumentsTask,
     NotesTask,
     PitchTask,
+    crepe_available,
     monophonic,
     segments_from,
     summarize_instruments,
@@ -101,7 +102,14 @@ def test_monophonic_keeps_the_loudest():
     assert [(n["pitch"], n["start"], n["end"]) for n in out] == [(60, 0.0, 1.0), (72, 1.0, 1.2), (64, 1.2, 2.0)]
 
 
-def test_pitch_tracking_follows_steps_and_silence(tmp_path):
+ENGINES = [
+    "pyin",
+    pytest.param("crepe", marks=pytest.mark.skipif(not crepe_available(), reason="torchcrepe no instalado")),
+]
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_pitch_tracking_follows_steps_and_silence(tmp_path, engine):
     sr = 16_000
     # La4 2 s, silencio 1 s, Do5 + 30 cents 2 s.
     t = np.arange(sr * 2) / sr
@@ -111,8 +119,11 @@ def test_pitch_tracking_follows_steps_and_silence(tmp_path):
     src = tmp_path / "voz.wav"
     sf.write(src, y, sr, subtype="FLOAT")
     out = tmp_path / "pitch.json"
-    PitchTask(ModelManager(tmp_path / "models")).run({"input": str(src), "output": str(out)}, job())
+    r = PitchTask(ModelManager(tmp_path / "models")).run(
+        {"input": str(src), "output": str(out), "engine": engine, "device": "cpu"}, job()
+    )
     data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["source"] == r["source"] == ("pyin" if engine == "pyin" else "crepe-full")
     f0 = np.array(data["f0"])
     hop = data["hop"]
     assert hop == 0.01 and abs(len(f0) - 500) <= 2
@@ -127,11 +138,12 @@ def test_pitch_tracking_follows_steps_and_silence(tmp_path):
     assert (f0[int(2.2 / hop) : int(2.8 / hop)] == 0).all(), "silencio sin tono"
 
 
-def test_pitch_chunks_join_without_gaps():
+@pytest.mark.parametrize("engine", ENGINES)
+def test_pitch_chunks_join_without_gaps(engine):
     sr = 16_000
     t = np.arange(sr * 45) / sr  # más de dos trozos de 20 s
     y = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
-    f0, prob = track_pitch(y)
+    f0, prob = track_pitch(y, engine=engine, model="tiny")
     voiced = f0[50:-50]
     assert (voiced > 0).all(), np.where(voiced == 0)[0][:10]
     assert np.abs(1200 * np.log2(voiced / 220)).max() < 15
@@ -197,3 +209,130 @@ def test_panns_recognizes_noise_and_speech(tmp_path):
         data = json.loads(out.read_text(encoding="utf-8"))
         ids = [i["id"] for i in data["instruments"]]
         assert ids and ids[0] == "speech", data["instruments"]
+
+
+# ---- Curvas de tono de las notas (pitch bends) ------------------------------------------
+
+
+def test_simplify_and_note_bends():
+    from musicnova_ai.tasks.transcription import note_bends, simplify_curve
+
+    line = [(i * 0.01, i * 1.0) for i in range(50)]
+    assert simplify_curve(line, 1.0) == [line[0], line[-1]]
+    vee = [(i * 0.01, abs(i - 25) * 4.0) for i in range(51)]
+    s = simplify_curve(vee, 1.0)
+    assert len(s) == 3 and s[1] == (0.25, 0.0)
+    # Casi plana: sin curva. Fuera de rango: limitada a ±200 cents.
+    assert note_bends(1.0, 2.0, [(1.0 + i * 0.01, 3.0) for i in range(100)]) == []
+    b = note_bends(1.0, 2.0, [(1.0 + i * 0.01, 500.0 if i > 50 else 0.0) for i in range(100)])
+    assert b[0][0] == 0.0 and max(v for _, v in b) == 200.0
+
+
+@pytest.mark.parametrize("bends", ["contour", pytest.param("crepe", marks=pytest.mark.skipif(not crepe_available(), reason="torchcrepe no instalado"))])
+def test_notes_carry_pitch_bends(tmp_path, bends):
+    # La4 sostenido 2 s con vibrato de ±30 cents a 5 Hz y +15 cents de desvío medio.
+    sr = SR
+    t = np.arange(int(sr * 2.0)) / sr
+    cents = 15 + 30 * np.sin(2 * np.pi * 5 * t)
+    f = 440 * 2 ** (cents / 1200)
+    phase = 2 * np.pi * np.cumsum(f) / sr
+    y = np.zeros(int(sr * 3), dtype=np.float32)
+    y[int(0.5 * sr) : int(0.5 * sr) + len(t)] = (0.3 * np.sin(phase) + 0.1 * np.sin(2 * phase)) * np.minimum(1, t / 0.01)
+    src = tmp_path / "vibrato.wav"
+    sf.write(src, y, sr, subtype="FLOAT")
+    out = tmp_path / "notes.json"
+    NotesTask(ModelManager(tmp_path / "models")).run(
+        {"input": str(src), "output": str(out), "mode": "mono", "bends": bends, "device": "cpu"}, job()
+    )
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["bends"] == bends
+    note = max(data["notes"], key=lambda n: n["end"] - n["start"])
+    assert note["pitch"] == 69 and note["end"] - note["start"] > 1.5
+    # La curva reconstruida sigue el vibrato real (muestras en el tramo central).
+    pts = np.array(note["bends"])
+    tt = np.arange(0.3, 1.5, 0.01)
+    est = np.interp(tt, pts[:, 0], pts[:, 1])
+    true = 15 + 30 * np.sin(2 * np.pi * 5 * (note["start"] + tt - 0.5))
+    err = np.abs(est - true)
+    assert np.median(err) < (8 if bends == "crepe" else 15), np.median(err)
+    assert abs(np.mean(est) - 15) < 8
+
+
+# ---- Batería -------------------------------------------------------------------------------
+
+
+def drum_pattern(sr: int = 44_100, bars: int = 4, bpm: float = 100.0):
+    """Ritmo de rock sintético: bombo en 1 y 3, caja en 2 y 4, charles en corcheas."""
+    rng = np.random.default_rng(3)
+    beat = 60.0 / bpm
+    y = np.zeros(int(sr * (bars * 4 * beat + 1)), dtype=np.float32)
+    truth = {36: [], 38: [], 42: []}
+
+    def add(t0, x):
+        a = int(t0 * sr)
+        y[a : a + len(x)] += x[: len(y) - a]
+
+    for b in range(bars * 4):
+        t0 = 0.5 + b * beat
+        n = int(0.3 * sr)
+        tt = np.arange(n) / sr
+        if b % 2 == 0:
+            f = 50 + 70 * np.exp(-tt * 30)
+            add(t0, 0.8 * np.sin(2 * np.pi * np.cumsum(f) / sr) * np.exp(-tt * 12))
+            truth[36].append(t0)
+        else:
+            body = 0.4 * np.sin(2 * np.pi * 190 * tt) * np.exp(-tt * 25)
+            noise = 0.5 * rng.standard_normal(n) * np.exp(-tt * 18)
+            add(t0, body + noise)
+            truth[38].append(t0)
+        for half in (0.0, 0.5):
+            m = int(0.06 * sr)
+            # Ruido filtrado entre 6 y 14 kHz, como un charles cerrado.
+            spec = np.fft.rfft(rng.standard_normal(m))
+            fr = np.fft.rfftfreq(m, 1 / sr)
+            spec[(fr < 6000) | (fr > 14000)] = 0
+            hh = np.fft.irfft(spec, m) * 0.6 * np.exp(-np.arange(m) / sr * 70)
+            add(t0 + half * beat, hh)
+            truth[42].append(t0 + half * beat)
+    return y, truth
+
+
+def test_drums_transcribes_kick_snare_hihat(tmp_path):
+    from musicnova_ai.tasks.drums import DrumsTask
+
+    sr = 44_100
+    y, truth = drum_pattern(sr)
+    src = tmp_path / "bateria.wav"
+    sf.write(src, y, sr, subtype="FLOAT")
+    out = tmp_path / "notes.json"
+    DrumsTask(ModelManager(tmp_path / "models")).run({"input": str(src), "output": str(out)}, job())
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["mode"] == "drums"
+    notes = data["notes"]
+    assert {n["pitch"] for n in notes} <= {36, 38, 42}
+    for pitch, times in truth.items():
+        got = [n["start"] for n in notes if n["pitch"] == pitch]
+        hits = sum(1 for t in times if any(abs(g - t) <= 0.03 for g in got))
+        assert hits >= 0.9 * len(times), (pitch, hits, len(times), got[:10])
+        assert len(got) <= 1.15 * len(times) + 1, (pitch, len(got), len(times))
+
+
+def test_stem_probs_take_each_group_from_its_stem():
+    from musicnova_ai.tasks.transcription import _labels, combine_stem_probs
+
+    labels = _labels()
+    idx = {n: i for i, n in enumerate(labels)}
+    mix = np.full((3, len(labels)), 0.01, dtype=np.float32)
+    vocals = mix.copy()
+    vocals[:, idx["Singing"]] = 0.9
+    vocals[:, idx["Piano"]] = 0.8  # la voz no debe aportar piano
+    other = mix.copy()
+    other[:, idx["Piano"]] = 0.5
+    out = combine_stem_probs(mix, {"vocals": vocals, "other": other}, labels)
+    assert out[0, idx["Singing"]] == pytest.approx(0.9)
+    assert out[0, idx["Piano"]] == pytest.approx(0.5)
+    # Sin stem de batería, la batería sale de la mezcla; las clases ajenas a los grupos, también.
+    assert out[0, idx["Drum kit"]] == pytest.approx(0.01)
+    assert out[0, idx["Music"]] == pytest.approx(0.01)
+    summary = {i["id"] for i in summarize_instruments(out, labels, 9.0)}
+    assert {"vocals", "piano"} <= summary

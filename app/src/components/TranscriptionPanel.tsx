@@ -6,7 +6,9 @@ import {
   type InstrumentReport,
   type ModelInfo,
   type MusicalKey,
+  type NotesMode,
   type PitchCurve,
+  type PitchEngine,
   type ProjectView,
   type TrackView,
   type Transcription,
@@ -14,7 +16,7 @@ import {
 } from '../lib/api'
 import { keyName, type Notation } from '../lib/chords'
 import { formatTime } from '../lib/format'
-import { noteLabel, scaleOf, tuningStats } from '../lib/notes'
+import { pitchLabel, scaleOf, tuningStats } from '../lib/notes'
 import { TRACK_KINDS } from '../lib/tracks'
 import { JOB_LABEL, type TranscriptionJobs } from '../lib/useTranscription'
 import { Icon } from './Icon'
@@ -34,11 +36,11 @@ interface Props {
   onError: (m: string) => void
 }
 
-/** Pistas que tiene sentido transcribir: las que tienen altura (no la batería ni lo generado). */
-const transcribable = (t: TrackView) => t.kind !== 'drums' && t.kind !== 'generated'
+/** Pistas que tiene sentido transcribir: todas menos las generadas. */
+const transcribable = (t: TrackView) => t.kind !== 'generated'
 const isVoice = (t: TrackView) => t.kind === 'vocals' || t.kind === 'backing_vocals' || t.kind === 'recording'
 /** Pista por defecto: un stem melódico antes que la mezcla. */
-const PREFERRED = ['piano', 'bass', 'guitar', 'vocals', 'other', 'recording', 'backing_vocals', 'mix']
+const PREFERRED = ['piano', 'bass', 'guitar', 'vocals', 'other', 'drums', 'recording', 'backing_vocals', 'mix']
 
 export function TranscriptionPanel(props: Props) {
   const { project, jobs, workerReady } = props
@@ -87,11 +89,12 @@ function NotesSection(props: Props & { candidates: TrackView[] }) {
   const { project, candidates, jobs, workerReady, notation } = props
   const [trackId, setTrackId] = useState(candidates[0]?.id ?? '')
   const track = candidates.find((t) => t.id === trackId) ?? candidates[0]
-  const [modeChoice, setModeChoice] = useState<'auto' | 'poly' | 'mono'>('auto')
+  const [modeChoice, setModeChoice] = useState<'auto' | NotesMode>('auto')
   const [sensitivity, setSensitivity] = useState(0.5)
   const [busy, setBusy] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
-  const mode = modeChoice === 'auto' ? (track && (isVoice(track) || track.kind === 'bass') ? 'mono' : 'poly') : modeChoice
+  const autoMode: NotesMode = !track ? 'poly' : track.kind === 'drums' ? 'drums' : isVoice(track) || track.kind === 'bass' ? 'mono' : 'poly'
+  const mode = modeChoice === 'auto' ? autoMode : modeChoice
   const transcribed = project.notes?.tracks.filter((tn) => tracks(project).has(tn.track_id)) ?? []
 
   const exportMidi = async (only: string | null) => {
@@ -132,7 +135,8 @@ function NotesSection(props: Props & { candidates: TrackView[] }) {
       </h3>
       <p className="small muted">
         Convierte una pista en notas (Basic Pitch) para verlas en un piano roll, corregirlas y exportarlas a MIDI con el
-        tempo de la canción. Funciona mejor con stems separados que con la mezcla.
+        tempo de la canción, incluidas las curvas de tono de cada nota. La batería se transcribe como bombo, caja y
+        charles. Funciona mejor con stems separados que con la mezcla.
       </p>
       {candidates.length === 0 ? (
         <span className="small muted">No hay pistas con notas que transcribir.</span>
@@ -151,9 +155,10 @@ function NotesSection(props: Props & { candidates: TrackView[] }) {
           <label className="field">
             <span className="small muted">Tipo</span>
             <select value={modeChoice} onChange={(e) => setModeChoice(e.target.value as typeof modeChoice)}>
-              <option value="auto">Automático ({mode === 'mono' ? 'una nota a la vez' : 'acordes'})</option>
+              <option value="auto">Automático ({MODE_LABEL[autoMode]})</option>
               <option value="poly">Polifónico (acordes)</option>
               <option value="mono">Monofónico (melodía, bajo, voz)</option>
+              <option value="drums">Batería (bombo, caja, charles)</option>
             </select>
           </label>
           <label className="field" title="Más sensibilidad detecta notas más débiles, pero también más notas falsas">
@@ -180,9 +185,12 @@ function NotesSection(props: Props & { candidates: TrackView[] }) {
                 <strong className="ellipsis">{t.name}</strong>
                 <span className="small muted">
                   {tn.notes.length} notas
-                  {pitches.length > 0 &&
-                    ` · ${noteLabel(Math.min(...pitches), notation)}–${noteLabel(Math.max(...pitches), notation)}`}
+                  {tn.mode === 'drums'
+                    ? ` · ${[...new Set(pitches)].sort((a, b) => a - b).map((p) => pitchLabel(p, notation, true).toLowerCase()).join(', ')}`
+                    : pitches.length > 0 &&
+                      ` · ${pitchLabel(Math.min(...pitches), notation, false)}–${pitchLabel(Math.max(...pitches), notation, false)}`}
                   {tn.mode === 'mono' ? ' · monofónico' : ''}
+                  {tn.notes.some((n) => n.bends?.length) ? ` · ${tn.notes.filter((n) => n.bends?.length).length} con curva` : ''}
                 </span>
                 <div className="tx-actions">
                   <button
@@ -219,6 +227,8 @@ function NotesSection(props: Props & { candidates: TrackView[] }) {
 
 const tracks = (p: ProjectView) => new Set(p.tracks.map((t) => t.id))
 
+const MODE_LABEL: Record<NotesMode, string> = { poly: 'acordes', mono: 'una nota a la vez', drums: 'batería' }
+
 // ---- Afinación vocal ------------------------------------------------------------------
 
 type ScaleChoice = 'key' | 'chromatic' | `${number}-${'major' | 'minor'}`
@@ -228,6 +238,12 @@ function scaleFor(choice: ScaleChoice, key: MusicalKey | undefined): number[] {
   if (choice === 'key') return key ? scaleOf(key) : []
   const [tonic, mode] = choice.split('-')
   return scaleOf({ tonic: Number(tonic), mode: mode as 'major' | 'minor' })
+}
+
+function sourceLabel(source: string): string {
+  if (source === 'crepe-full') return 'CREPE'
+  if (source === 'crepe-tiny') return 'CREPE rápido'
+  return source === 'pyin' ? 'pYIN' : source
 }
 
 function TuningSection(props: Props & { voices: TrackView[] }) {
@@ -240,6 +256,7 @@ function TuningSection(props: Props & { voices: TrackView[] }) {
   const scale = scaleFor(scaleChoice, key)
   const stats = useMemo(() => (curve ? tuningStats(curve, scale) : null), [curve, scale])
   const [settings, setSettings] = useState<Omit<TuneSettings, 'scale'>>({ strength: 0.8, speed: 0.2, preserve_formants: true })
+  const [engine, setEngine] = useState<PitchEngine>('crepe-full')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const pct = (x: number) => `${Math.round(x * 100)} %`
@@ -284,7 +301,15 @@ function TuningSection(props: Props & { voices: TrackView[] }) {
               ))}
             </select>
           </label>
-          <button className="btn primary" disabled={!workerReady || !trackId} onClick={() => jobs.startPitch(trackId)}>
+          <label className="field" title="CREPE es una red neuronal: más precisa y distingue mejor la voz de las respiraciones. pYIN es estadístico">
+            <span className="small muted">Detector de tono</span>
+            <select value={engine} onChange={(e) => setEngine(e.target.value as PitchEngine)}>
+              <option value="crepe-full">CREPE (preciso)</option>
+              <option value="crepe-tiny">CREPE rápido</option>
+              <option value="pyin">pYIN (sin red neuronal)</option>
+            </select>
+          </label>
+          <button className="btn primary" disabled={!workerReady || !trackId} onClick={() => jobs.startPitch(trackId, engine)}>
             <Icon name="play" size={16} /> {curve ? 'Volver a analizar' : 'Analizar afinación'}
           </button>
         </div>
@@ -318,7 +343,7 @@ function TuningSection(props: Props & { voices: TrackView[] }) {
                 <strong>{stats.meanCents.toFixed(0)}</strong> <span className="small muted">cents de desviación media</span>
               </span>
               <span className="small muted">
-                {curveTrack.name} · {formatTime(stats.voicedSeconds)} cantados
+                {curveTrack.name} · {formatTime(stats.voicedSeconds)} cantados · {sourceLabel(curve.source)}
               </span>
             </div>
           </div>
@@ -402,7 +427,11 @@ function InstrumentsSection(props: Props) {
       <h3>
         <Icon name="model" size={16} /> Instrumentos
       </h3>
-      <p className="small muted">Reconoce qué instrumentos suenan en la canción y en qué momentos (PANNs, clases de AudioSet).</p>
+      <p className="small muted">
+        Reconoce qué instrumentos suenan en la canción y en qué momentos (PANNs, clases de AudioSet). Si has separado los
+        stems, busca cada instrumento en el suyo y acierta bastante más.
+        {!project.tracks.some((t) => t.kind === 'vocals' || t.kind === 'other') && ' Este proyecto aún no está separado.'}
+      </p>
       {models !== null && models.length === 0 ? (
         <div className="panel-row">
           <span className="small">Necesitas descargar un modelo PANNs (una sola vez).</span>
@@ -428,6 +457,11 @@ function InstrumentsSection(props: Props) {
             <Icon name="play" size={16} /> {report ? 'Volver a detectar' : 'Detectar instrumentos'}
           </button>
         </div>
+      )}
+      {report && (
+        <span className="small muted">
+          {report.stems?.length ? `Analizado con los stems separados (${report.stems.length}).` : 'Analizado con la mezcla.'}
+        </span>
       )}
       {report && report.instruments.length === 0 && <span className="small muted">No se reconoció ningún instrumento con claridad.</span>}
       {report && report.instruments.length > 0 && (

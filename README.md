@@ -19,6 +19,8 @@ ai-worker/      Proceso de IA en Python (JSON-RPC por stdin/stdout, trabajos can
                 gestor de modelos con manifiestos TOML y verificación SHA-256)
 docs/PLAN.md    Análisis, decisiones y plan por fases
 docs/PLUGINS.md Compatibilidad con plugins y sonda de pruebas
+docs/TRANSCRIPCION.md  Medidas de transcripción, afinación e instrumentos con audio real
+                       (scripts y descarga de datos en ai-worker/eval/)
 ```
 
 ## Desarrollo (Windows)

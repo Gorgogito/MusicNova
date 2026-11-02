@@ -284,11 +284,16 @@ export interface Note {
   /** Nota MIDI (60 = Do central). */
   pitch: number
   velocity: number
+  /** Curva de tono dentro de la nota: [segundos desde el inicio, cents]. */
+  bends?: [number, number][]
 }
+
+/** «poly» (acordes), «mono» (una nota a la vez) o «drums» (percusión General MIDI). */
+export type NotesMode = 'poly' | 'mono' | 'drums'
 
 export interface TrackNotes {
   track_id: string
-  mode: 'poly' | 'mono'
+  mode: NotesMode
   notes: Note[]
 }
 
@@ -296,6 +301,9 @@ export interface Transcription {
   version: number
   tracks: TrackNotes[]
 }
+
+/** Detector de tono de la voz: CREPE (red neuronal, completo o rápido) o pYIN. */
+export type PitchEngine = 'crepe-full' | 'crepe-tiny' | 'pyin'
 
 export interface PitchCurve {
   version: number
@@ -321,6 +329,8 @@ export interface InstrumentReport {
   source: string
   duration: number
   instruments: Instrument[]
+  /** Stems separados con los que se analizó (vacío = solo la mezcla). */
+  stems?: string[]
 }
 
 export interface TuneSettings {
@@ -516,14 +526,14 @@ export const api = {
   lyricsApply: () => invoke<Lyrics>('lyrics_apply'),
   lyricsUpdate: (lyrics: Lyrics) => invoke<Lyrics>('lyrics_update', { lyrics }),
   lyricsExport: (path: string, format: LyricsFormat) => invoke<string>('lyrics_export', { path, format }),
-  notesStart: (trackId: string, mode: 'poly' | 'mono', sensitivity: number, device: string) =>
+  notesStart: (trackId: string, mode: NotesMode, sensitivity: number, device: string) =>
     invoke<{ job_id: string }>('notes_start', { trackId, mode, sensitivity, device }),
   notesApply: (trackId: string) => invoke<Transcription>('notes_apply', { trackId }),
   notesUpdate: (trackId: string, notes: Note[]) => invoke<Transcription>('notes_update', { trackId, notes }),
   notesRemove: (trackId: string) => invoke<Transcription>('notes_remove', { trackId }),
   notesExportMidi: (path: string, trackId: string | null) => invoke<string>('notes_export_midi', { path, trackId }),
   notesRender: (trackId: string) => invoke<ProjectView>('notes_render', { trackId }),
-  pitchStart: (trackId: string) => invoke<{ job_id: string }>('pitch_start', { trackId }),
+  pitchStart: (trackId: string, engine: PitchEngine) => invoke<{ job_id: string }>('pitch_start', { trackId, engine }),
   pitchApply: (trackId: string) => invoke<PitchCurve>('pitch_apply', { trackId }),
   tuneRender: (settings: TuneSettings) => invoke<ProjectView>('tune_render', { settings }),
   instrumentsStart: (modelId: string | undefined, device: string) =>

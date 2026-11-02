@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, errorMessage, events, type InstrumentReport, type PitchCurve, type Transcription } from './api'
+import { api, errorMessage, events, type InstrumentReport, type NotesMode, type PitchCurve, type PitchEngine, type Transcription } from './api'
 
 export type TranscriptionKind = 'notes' | 'pitch' | 'instruments'
 
@@ -88,11 +88,14 @@ export function useTranscription(handlers: TranscriptionHandlers, onError: (m: s
   )
 
   const startNotes = useCallback(
-    (trackId: string, mode: 'poly' | 'mono', sensitivity: number, device: string) =>
+    (trackId: string, mode: NotesMode, sensitivity: number, device: string) =>
       run('notes', trackId, () => api.notesStart(trackId, mode, sensitivity, device)),
     [run],
   )
-  const startPitch = useCallback((trackId: string) => run('pitch', trackId, () => api.pitchStart(trackId)), [run])
+  const startPitch = useCallback(
+    (trackId: string, engine: PitchEngine) => run('pitch', trackId, () => api.pitchStart(trackId, engine)),
+    [run],
+  )
   const startInstruments = useCallback(
     (modelId: string | undefined, device: string) => run('instruments', null, () => api.instrumentsStart(modelId, device)),
     [run],

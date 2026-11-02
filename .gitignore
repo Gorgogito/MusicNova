@@ -15,3 +15,6 @@ __pycache__/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Datos de evaluación (se descargan con ai-worker/eval/fetch.py; no se redistribuyen)
+ai-worker/eval-data/

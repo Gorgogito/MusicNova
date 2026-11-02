@@ -98,8 +98,10 @@ void signalsmith_stretch_set_formant_factor_semitones(signalsmith_stretch_t *han
     handle->instance.setFormantSemitones(semitones, compensate_pitch);
 }
 
+// MusicNova: el original llamaba por error a setFormantSemitones. `frequency`
+// es la fundamental aproximada normalizada (Hz / frecuencia de muestreo); 0 = detectarla.
 void signalsmith_stretch_set_formant_base(signalsmith_stretch_t *handle, float frequency) {
-    handle->instance.setFormantSemitones(frequency);
+    handle->instance.setFormantBase(frequency);
 }
 
 void signalsmith_stretch_seek(signalsmith_stretch_t *handle, float *input, size_t input_length, double playback_rate) {

@@ -12,6 +12,46 @@ export function noteLabel(pitch: number, notation: Notation, flats = false): str
 
 export const isBlackKey = (pitch: number) => [1, 3, 6, 8, 10].includes(mod12(pitch))
 
+/** Nombres de las alturas del mapa de percusión General MIDI que se transcriben o se suelen usar. */
+export const DRUM_NAMES: Record<number, string> = {
+  35: 'Bombo 2',
+  36: 'Bombo',
+  37: 'Aro',
+  38: 'Caja',
+  39: 'Palmas',
+  40: 'Caja 2',
+  41: 'Tom de suelo',
+  42: 'Charles cerrado',
+  43: 'Tom de suelo 2',
+  44: 'Charles (pedal)',
+  45: 'Tom grave',
+  46: 'Charles abierto',
+  47: 'Tom medio',
+  48: 'Tom agudo',
+  49: 'Crash',
+  50: 'Tom agudo 2',
+  51: 'Ride',
+}
+
+/** Nombre de una altura: nota musical o instrumento de batería. */
+export function pitchLabel(pitch: number, notation: Notation, drums: boolean): string {
+  return drums ? (DRUM_NAMES[pitch] ?? `Percusión ${pitch}`) : noteLabel(pitch, notation)
+}
+
+/** Desvío (cents) de la curva de una nota a `dt` segundos de su inicio. */
+export function bendAt(n: Note, dt: number): number {
+  const b = n.bends
+  if (!b || b.length === 0) return 0
+  if (dt <= b[0][0]) return b[0][1]
+  for (let i = 1; i < b.length; i++) {
+    if (dt <= b[i][0]) {
+      const span = b[i][0] - b[i - 1][0]
+      return span > 0 ? b[i - 1][1] + ((b[i][1] - b[i - 1][1]) * (dt - b[i - 1][0])) / span : b[i][1]
+    }
+  }
+  return b[b.length - 1][1]
+}
+
 /** Nota MIDI continua de cada punto de la curva (NaN sin voz). */
 export function curveMidi(curve: PitchCurve): number[] {
   return curve.f0.map((f) => (f > 0 ? 69 + 12 * Math.log2(f / 440) : NaN))

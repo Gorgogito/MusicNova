@@ -331,4 +331,61 @@ mod tests {
         assert!((s[55] + 0.4).abs() < 0.01, "hueco corto: se mantiene");
         assert!(s[200].abs() < 1e-6, "hueco largo: vuelve a 0");
     }
+
+    /// Vocal sintética: armónicos de `f0` con la envolvente de una /a/
+    /// (formantes en 700 y 1200 Hz).
+    fn vowel(f0: f32, secs: f32) -> AudioBuffer {
+        let n = (secs * RATE as f32) as usize;
+        let env = |f: f32| {
+            let peak = |c: f32, w: f32| (-((f - c) / w).powi(2)).exp();
+            peak(700.0, 150.0) + 0.7 * peak(1200.0, 200.0) + 0.02
+        };
+        let mut mono = vec![0.0f32; n];
+        let mut h = 1;
+        while f0 * h as f32 <= 5000.0 {
+            let (f, a) = (f0 * h as f32, env(f0 * h as f32));
+            for (i, s) in mono.iter_mut().enumerate() {
+                *s += 0.1 * a * (std::f32::consts::TAU * f * i as f32 / RATE as f32).sin();
+            }
+            h += 1;
+        }
+        AudioBuffer { sample_rate: RATE, data: mono.iter().flat_map(|&s| [s, s]).collect() }
+    }
+
+    /// Centroide espectral (Hz) entre 300 y 3000 Hz del tramo central (DFT directa).
+    fn centroid(buf: &AudioBuffer) -> f32 {
+        let left: Vec<f32> = buf.data.as_chunks::<2>().0.iter().map(|f| f[0]).collect();
+        let n = 8192;
+        let start = left.len() / 2 - n / 2;
+        let x = &left[start..start + n];
+        let (mut num, mut den) = (0.0f64, 0.0f64);
+        let mut f = 300.0f64;
+        while f <= 3000.0 {
+            let w = std::f64::consts::TAU * f / RATE as f64;
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &v) in x.iter().enumerate() {
+                let hann = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+                re += v as f64 * hann * (w * i as f64).cos();
+                im += v as f64 * hann * (w * i as f64).sin();
+            }
+            let p = re * re + im * im;
+            num += f * p;
+            den += p;
+            f += 10.0;
+        }
+        (num / den) as f32
+    }
+
+    #[test]
+    fn preserving_formants_keeps_the_vowel() {
+        let voice = vowel(150.0, 1.0);
+        let shifts = vec![5.0; 102];
+        let c0 = centroid(&voice);
+        let kept = centroid(&apply_shifts(&voice, &shifts, 0.01, true));
+        let moved = centroid(&apply_shifts(&voice, &shifts, 0.01, false));
+        // +5 semitonos = ×1,335. Sin conservarlos, los formantes suben con la nota;
+        // conservándolos, el centroide apenas se mueve.
+        assert!((moved / c0 - 1.335).abs() < 0.08, "{c0} → {moved}");
+        assert!((kept / c0 - 1.0).abs() < 0.08, "{c0} → {kept}");
+    }
 }
