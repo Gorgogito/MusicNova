@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { api, errorMessage, type PluginParam } from '../lib/api'
 import { Icon } from './Icon'
 
+/** Cada cuánto se releen los parámetros con el panel abierto: refleja lo que se
+ * mueve en la ventana del propio plugin (y los plugins que cambian su lista). */
+const POLL_MS = 1000
+
 /** Controles de un efecto plugin: abrir su interfaz y parámetros genéricos. */
 export function PluginControls({ slotId }: { slotId: string }) {
   const [error, setError] = useState<string | null>(null)
@@ -9,20 +13,29 @@ export function PluginControls({ slotId }: { slotId: string }) {
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const refresh = useRef<number | null>(null)
+  /** Mientras el usuario arrastra un deslizador no se pisa su valor. */
+  const editing = useRef(false)
 
   const load = () =>
     api
       .pluginParams(slotId)
       .then((p) => {
+        if (editing.current) return
         setParams(p)
         setError(null)
       })
       .catch((e) => setError(errorMessage(e)))
 
   useEffect(() => {
-    if (open) load()
+    if (!open) return
+    load()
+    const poll = window.setInterval(() => {
+      if (!editing.current && refresh.current === null) load()
+    }, POLL_MS)
     return () => {
+      window.clearInterval(poll)
       if (refresh.current) window.clearTimeout(refresh.current)
+      refresh.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, slotId])
@@ -32,7 +45,10 @@ export function PluginControls({ slotId }: { slotId: string }) {
     api.pluginParamSet(slotId, p.id, value).catch((e) => setError(errorMessage(e)))
     // El texto («-6,0 dB») lo da el plugin: se vuelve a pedir al terminar de mover.
     if (refresh.current) window.clearTimeout(refresh.current)
-    refresh.current = window.setTimeout(load, 250)
+    refresh.current = window.setTimeout(() => {
+      refresh.current = null
+      load()
+    }, 250)
   }
 
   const shown = (params ?? []).filter((p) => !filter || p.name.toLowerCase().includes(filter.toLowerCase()))
@@ -72,6 +88,10 @@ export function PluginControls({ slotId }: { slotId: string }) {
                   max={p.max}
                   step={p.stepped && p.max - p.min >= 1 ? 1 : (p.max - p.min) / 1000 || 0.001}
                   value={p.value}
+                  onPointerDown={() => (editing.current = true)}
+                  onPointerUp={() => (editing.current = false)}
+                  onPointerCancel={() => (editing.current = false)}
+                  onBlur={() => (editing.current = false)}
                   onChange={(e) => set(p, Number(e.target.value))}
                   onDoubleClick={() => set(p, p.default)}
                 />

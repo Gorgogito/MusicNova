@@ -199,3 +199,33 @@ fn clap_editor_opens_in_window_and_closes() {
     inst.close_editor();
     assert!(!inst.editor_open());
 }
+
+/// Incumplimientos de los estándares que detectó el plugin de prueba en esta
+/// copia de la DLL (la misma ruta devuelve el módulo ya cargado).
+fn violations(path: &Path) -> u32 {
+    let binary = if path.is_dir() { path.join("Contents").join("x86_64-win").join(path.file_name().unwrap()) } else { path.to_path_buf() };
+    unsafe {
+        let lib = libloading::Library::new(binary).unwrap();
+        let f: libloading::Symbol<unsafe extern "C" fn() -> u32> = lib.get(b"mn_test_violations\0").unwrap();
+        f()
+    }
+}
+
+#[test]
+fn host_follows_threading_and_output_rules() {
+    let f = fixture();
+    for (path, format, value) in [(&f.clap, PluginFormat::Clap, -6.0), (&f.vst3, PluginFormat::Vst3, 0.5)] {
+        let r = plugin_ref(path, format);
+        let _keep = Instance::load(&r, 48_000).unwrap(); // mantiene la DLL cargada para leer el contador
+        let inst = Instance::load(&r, 48_000).unwrap();
+        let mut p = PluginProcessor::new(inst.clone());
+        inst.set_param(inst.params()[0].id, value);
+        run(&mut p);
+        p.reset();
+        run(&mut p);
+        assert_eq!(inst.params()[0].value, value, "{format:?}: el controlador conserva el valor");
+        drop(p);
+        drop(inst); // apagado: stop_processing (CLAP) en un hilo de audio
+        assert_eq!(violations(path), 0, "{format:?}: el plugin de prueba detectó incumplimientos (ver stderr)");
+    }
+}

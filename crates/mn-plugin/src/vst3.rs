@@ -78,7 +78,7 @@ fn fixed_str(buf: &[c_char]) -> String {
 
 fn wide_str(buf: &[TChar]) -> String {
     let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    String::from_utf16_lossy(&buf[..n].iter().map(|&c| c as u16).collect::<Vec<_>>())
+    String::from_utf16_lossy(&buf[..n].iter().map(|&c| c).collect::<Vec<_>>())
 }
 
 fn tuid_hex(t: &TUID) -> String {
@@ -424,11 +424,13 @@ fn stream_ptr(s: &ComWrapper<MemStream>) -> *mut IBStream {
     s.as_com_ref::<IBStream>().unwrap().as_ptr()
 }
 
-/// Cambio de un parámetro para un bloque (un único punto al principio).
+/// Cambio de un parámetro para un bloque. Las de entrada llevan un único
+/// punto al principio; en las de salida el plugin añade puntos y se conserva el último.
 #[derive(Default)]
 struct ParamQueue {
     id: Cell<u32>,
     value: Cell<f64>,
+    points: Cell<i32>,
 }
 
 impl Class for ParamQueue {
@@ -440,18 +442,23 @@ impl IParamValueQueueTrait for ParamQueue {
         self.id.get()
     }
     unsafe fn getPointCount(&self) -> int32 {
-        1
+        self.points.get()
     }
     unsafe fn getPoint(&self, index: int32, offset: *mut int32, value: *mut ParamValue) -> tresult {
-        if index != 0 {
+        if index < 0 || index >= self.points.get() || offset.is_null() || value.is_null() {
             return kResultFalse;
         }
         *offset = 0;
         *value = self.value.get();
         kResultOk
     }
-    unsafe fn addPoint(&self, _offset: int32, _value: ParamValue, _index: *mut int32) -> tresult {
-        kResultFalse
+    unsafe fn addPoint(&self, _offset: int32, value: ParamValue, index: *mut int32) -> tresult {
+        self.value.set(value);
+        self.points.set(1);
+        if !index.is_null() {
+            *index = 0;
+        }
+        kResultOk
     }
 }
 
@@ -477,13 +484,33 @@ impl ParamChanges {
 
     /// Añade o actualiza (el último valor manda). Sin reservas.
     fn set(&self, id: u32, value: f64) {
+        if let Some(i) = self.slot(id) {
+            self.queues[i].value.set(value);
+            self.queues[i].points.set(1);
+        }
+    }
+
+    /// Índice de la cola de `id`, creándola si cabe.
+    fn slot(&self, id: u32) -> Option<usize> {
         let n = self.count.get();
-        if let Some(q) = self.queues[..n].iter().find(|q| q.id.get() == id) {
-            q.value.set(value);
-        } else if n < MAX_CHANGES {
-            self.queues[n].id.set(id);
-            self.queues[n].value.set(value);
-            self.count.set(n + 1);
+        if let Some(i) = self.queues[..n].iter().position(|q| q.id.get() == id) {
+            return Some(i);
+        }
+        if n == MAX_CHANGES {
+            return None;
+        }
+        self.queues[n].id.set(id);
+        self.queues[n].points.set(0);
+        self.count.set(n + 1);
+        Some(n)
+    }
+
+    /// Cambios con algún punto (para las de salida).
+    fn each(&self, mut f: impl FnMut(u32, f64)) {
+        for q in &self.queues[..self.count.get()] {
+            if q.points.get() > 0 {
+                f(q.id.get(), q.value.get());
+            }
         }
     }
 }
@@ -499,8 +526,17 @@ impl IParameterChangesTrait for ParamChanges {
             ptr::null_mut()
         }
     }
-    unsafe fn addParameterData(&self, _id: *const ParamID, _index: *mut int32) -> *mut IParamValueQueue {
-        ptr::null_mut()
+    unsafe fn addParameterData(&self, id: *const ParamID, index: *mut int32) -> *mut IParamValueQueue {
+        let Some(id) = id.as_ref() else { return ptr::null_mut() };
+        match self.slot(*id) {
+            Some(i) => {
+                if !index.is_null() {
+                    *index = i as int32;
+                }
+                self.ptrs[i]
+            }
+            None => ptr::null_mut(),
+        }
     }
 }
 
@@ -508,22 +544,30 @@ impl IParameterChangesTrait for ParamChanges {
 
 struct Scratch {
     changes: ComWrapper<ParamChanges>,
+    /// Cambios que informa el propio procesador (medidores, parámetros internos).
+    out_changes: ComWrapper<ParamChanges>,
+    out_tx: rtrb::Producer<(u32, f64)>,
     edits: rtrb::Consumer<(u32, f64)>,
     context: ProcessContext,
     mono: Vec<f32>,
 }
 
+// El orden de los campos es el de liberación: la vista, las conexiones, el
+// procesador y el controlador se sueltan antes que el componente, y la
+// biblioteca al final (algunos plugins avisan o fallan si no).
 pub(crate) struct Vst3Plugin {
-    component: ComPtr<IComponent>,
-    processor: ComPtr<IAudioProcessor>,
-    controller: Option<ComPtr<IEditController>>,
+    view: Mutex<Option<ComPtr<IPlugView>>>,
     /// Puntos de conexión enlazados (componente, controlador) si van por separado.
     connection: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
+    processor: ComPtr<IAudioProcessor>,
+    controller: Option<ComPtr<IEditController>>,
+    component: ComPtr<IComponent>,
+    /// Cambios de salida del procesador pendientes de reflejar en el controlador.
+    out_rx: Mutex<rtrb::Consumer<(u32, f64)>>,
     separate_controller: bool,
     _host: ComWrapper<HostApp>,
     _handler: ComWrapper<Handler>,
     frame: ComWrapper<PlugFrame>,
-    view: Mutex<Option<ComPtr<IPlugView>>>,
     editor_hwnd: Arc<AtomicIsize>,
     in_channels: i32,
     out_channels: i32,
@@ -646,7 +690,7 @@ impl Vst3Plugin {
                 me.shutdown_inner();
                 return Err("el plugin no admite esta configuración de audio".into());
             }
-            (*me.audio.get_mut()).context.sampleRate = sample_rate as f64;
+            me.audio.get_mut().context.sampleRate = sample_rate as f64;
             if me.component.setActive(1) != kResultOk {
                 me.shutdown_inner();
                 return Err("el plugin no se pudo activar".into());
@@ -676,7 +720,9 @@ impl Vst3Plugin {
         context.tempo = 120.0;
         context.timeSigNumerator = 4;
         context.timeSigDenominator = 4;
+        let (out_tx, out_rx) = rtrb::RingBuffer::new(1024);
         Self {
+            out_rx: Mutex::new(out_rx),
             component,
             processor,
             controller,
@@ -690,8 +736,24 @@ impl Vst3Plugin {
             in_channels,
             out_channels,
             processing: AtomicBool::new(false),
-            audio: UnsafeCell::new(Scratch { changes: ComWrapper::new(ParamChanges::new()), edits, context, mono: vec![0.0; MAX_BLOCK] }),
+            audio: UnsafeCell::new(Scratch {
+                changes: ComWrapper::new(ParamChanges::new()),
+                out_changes: ComWrapper::new(ParamChanges::new()),
+                out_tx,
+                edits,
+                context,
+                mono: vec![0.0; MAX_BLOCK],
+            }),
             _lib: lib,
+        }
+    }
+
+    /// Hilo principal: refleja en el controlador lo que informó el procesador.
+    fn drain_output_changes(&self) {
+        let Some(c) = &self.controller else { return };
+        let Ok(mut rx) = self.out_rx.lock() else { return };
+        while let Ok((id, v)) = rx.pop() {
+            unsafe { c.setParamNormalized(id, v) };
         }
     }
 
@@ -734,6 +796,7 @@ impl Vst3Plugin {
 
 impl Backend for Vst3Plugin {
     fn params(&self) -> Vec<ParamInfo> {
+        self.drain_output_changes();
         let Some(c) = &self.controller else { return Vec::new() };
         let mut out = Vec::new();
         unsafe {
@@ -751,7 +814,8 @@ impl Backend for Vst3Plugin {
                 let text = if c.getParamStringByValue(info.id, value, &mut text) == kResultOk {
                     let units = wide_str(&info.units);
                     let t = wide_str(&text);
-                    if units.is_empty() { t } else { format!("{t} {units}") }
+                    let t = t.trim();
+                    if units.is_empty() { t.to_string() } else { format!("{t} {units}") }
                 } else {
                     format!("{value:.3}")
                 };
@@ -777,6 +841,7 @@ impl Backend for Vst3Plugin {
     }
 
     fn save_state(&self) -> Option<Vec<u8>> {
+        self.drain_output_changes();
         // Formato propio: [u32 bytes del componente][componente][controlador].
         let comp = ComWrapper::new(MemStream::default());
         if unsafe { self.component.getState(stream_ptr(&comp)) } != kResultOk {
@@ -872,6 +937,7 @@ impl Backend for Vst3Plugin {
             self.processing.store(true, Ordering::Relaxed);
         }
         s.changes.count.set(0);
+        s.out_changes.count.set(0);
         for &(id, v) in params {
             s.changes.set(id, v.clamp(0.0, 1.0));
         }
@@ -907,7 +973,7 @@ impl Backend for Vst3Plugin {
             inputs: &mut inputs,
             outputs: &mut outputs,
             inputParameterChanges: s.changes.as_com_ref::<IParameterChanges>().unwrap().as_ptr(),
-            outputParameterChanges: ptr::null_mut(),
+            outputParameterChanges: s.out_changes.as_com_ref::<IParameterChanges>().unwrap().as_ptr(),
             inputEvents: ptr::null_mut(),
             outputEvents: ptr::null_mut(),
             processContext: &mut s.context,
@@ -918,6 +984,10 @@ impl Backend for Vst3Plugin {
         } else if self.out_channels == 1 {
             outr.copy_from_slice(outl);
         }
+        let tx = &mut s.out_tx;
+        s.out_changes.each(|id, v| {
+            let _ = tx.push((id, v));
+        });
         s.context.projectTimeSamples += n as i64;
         s.context.continousTimeSamples += n as i64;
     }

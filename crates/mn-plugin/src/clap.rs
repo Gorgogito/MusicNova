@@ -166,12 +166,12 @@ unsafe extern "C" fn host_get_extension(_host: *const clap_host, id: *const c_ch
 unsafe extern "C" fn host_request_restart(_host: *const clap_host) {}
 unsafe extern "C" fn host_request_process(_host: *const clap_host) {}
 
-struct SendPtr(*const HostData);
-unsafe impl Send for SendPtr {}
+struct SendPtr<T>(*const T);
+unsafe impl<T> Send for SendPtr<T> {}
 
-impl SendPtr {
+impl<T> SendPtr<T> {
     /// Acceder por método obliga al closure a capturar la envoltura entera (que es `Send`).
-    fn get(&self) -> *const HostData {
+    fn get(&self) -> *const T {
         self.0
     }
 }
@@ -379,14 +379,13 @@ unsafe fn main_ports(plugin: *const clap_plugin) -> (u32, u32) {
         let mut first = 0;
         for i in 0..n {
             let mut info: clap_audio_port_info = std::mem::zeroed();
-            if ports.get.is_some_and(|g| g(plugin, i, is_input, &mut info)) {
-                if info.flags & CLAP_AUDIO_PORT_IS_MAIN != 0 || i == 0 {
+            if ports.get.is_some_and(|g| g(plugin, i, is_input, &mut info))
+                && (info.flags & CLAP_AUDIO_PORT_IS_MAIN != 0 || i == 0) {
                     first = info.channel_count.min(2);
                     if info.flags & CLAP_AUDIO_PORT_IS_MAIN != 0 {
                         break;
                     }
                 }
-            }
         }
         first
     };
@@ -432,7 +431,7 @@ impl Backend for ClapPlugin {
                 }
                 let mut text = [0 as c_char; 64];
                 let text = if p.value_to_text.is_some_and(|f| f(self.plugin, info.id, value, text.as_mut_ptr(), 64)) {
-                    cstr(text.as_ptr())
+                    cstr(text.as_ptr()).trim().to_string()
                 } else {
                     format!("{value:.2}")
                 };
@@ -603,6 +602,10 @@ impl Backend for ClapPlugin {
     }
 
     fn reset(&self) {
+        // `reset` es del hilo de audio y solo con el procesado en marcha.
+        if !self.processing.load(Ordering::Relaxed) {
+            return;
+        }
         if let Some(f) = unsafe { (*self.plugin).reset } {
             unsafe { f(self.plugin) };
         }
@@ -613,7 +616,15 @@ impl Backend for ClapPlugin {
         unsafe {
             if self.processing.swap(false, Ordering::AcqRel) {
                 if let Some(f) = (*self.plugin).stop_processing {
-                    f(self.plugin);
+                    // El estándar exige el hilo de audio: el motor ya soltó la
+                    // instancia, así que un hilo breve marcado como de audio
+                    // hace su papel (los plugins lo comprueban con thread-check).
+                    let plugin = SendPtr(self.plugin);
+                    let _ = std::thread::spawn(move || {
+                        crate::IN_AUDIO.with(|a| a.set(true));
+                        f(plugin.get());
+                    })
+                    .join();
                 }
             }
             if let Some(f) = (*self.plugin).deactivate {

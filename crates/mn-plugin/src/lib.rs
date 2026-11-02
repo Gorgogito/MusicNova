@@ -342,7 +342,7 @@ impl Processor for PluginProcessor {
         }
         for (k, chunk) in buf.chunks_mut(MAX_BLOCK * 2).enumerate() {
             let n = chunk.len() / 2;
-            for (i, f) in chunk.chunks_exact(2).enumerate() {
+            for (i, f) in chunk.as_chunks::<2>().0.iter().enumerate() {
                 self.inl[i] = f[0];
                 self.inr[i] = f[1];
             }
@@ -354,7 +354,7 @@ impl Processor for PluginProcessor {
                     events,
                 );
             }
-            for (i, f) in chunk.chunks_exact_mut(2).enumerate() {
+            for (i, f) in chunk.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 f[0] = self.outl[i];
                 f[1] = self.outr[i];
             }

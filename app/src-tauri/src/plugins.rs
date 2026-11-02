@@ -16,6 +16,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::AppState;
 
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Prefijo de la línea con el resultado: los plugins pueden escribir en la salida estándar.
+const SCAN_MARK: &str = "MUSICNOVA-SCAN ";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ScanFailure {
@@ -68,8 +70,13 @@ pub fn scan_subprocess_main() -> bool {
         Ok(list) => serde_json::json!({ "ok": list }),
         Err(e) => serde_json::json!({ "error": e }),
     };
-    println!("{out}");
+    println!("\n{SCAN_MARK}{out}");
     true
+}
+
+/// Resultado del escáner: la última línea marcada de su salida.
+fn parse_scan_output(text: &str) -> Option<serde_json::Value> {
+    text.lines().rev().find_map(|l| l.trim().strip_prefix(SCAN_MARK)).and_then(|j| serde_json::from_str(j).ok())
 }
 
 fn scan_isolated(path: &Path) -> Result<Vec<PluginDescriptor>, String> {
@@ -82,6 +89,14 @@ fn scan_isolated(path: &Path) -> Result<Vec<PluginDescriptor>, String> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = cmd.spawn().map_err(|e| format!("no se pudo lanzar el escáner: {e}"))?;
+    // Se lee mientras corre: si el plugin escribe mucho, la tubería no se llena y bloquea.
+    let reader = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = out.read_to_end(&mut buf);
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    });
     let start = Instant::now();
     let status = loop {
         if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
@@ -93,12 +108,8 @@ fn scan_isolated(path: &Path) -> Result<Vec<PluginDescriptor>, String> {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let mut text = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut text);
-    }
-    let v: serde_json::Value = serde_json::from_str(text.trim())
-        .map_err(|_| format!("el plugin cerró el escáner inesperadamente ({status})"))?;
+    let text = reader.and_then(|r| r.join().ok()).unwrap_or_default();
+    let v = parse_scan_output(&text).ok_or_else(|| format!("el plugin cerró el escáner inesperadamente ({status})"))?;
     if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
         return Err(e.to_string());
     }
@@ -185,4 +196,16 @@ pub fn on_editor_closed(app: AppHandle) {
             let _ = app.emit("plugin-editor-closed", slot_id);
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_output_ignores_plugin_noise() {
+        let text = format!("hola desde el plugin\n{{\"ok\":1}}\n{SCAN_MARK}{{\"ok\":[]}}\nadiós\n");
+        assert_eq!(parse_scan_output(&text).unwrap(), serde_json::json!({ "ok": [] }));
+        assert!(parse_scan_output("{\"ok\":[]}").is_none());
+    }
 }

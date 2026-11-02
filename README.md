@@ -18,6 +18,7 @@ crates/mn-stretch Tempo y tono en tiempo real (Signalsmith Stretch, binding sin 
 ai-worker/      Proceso de IA en Python (JSON-RPC por stdin/stdout, trabajos cancelables,
                 gestor de modelos con manifiestos TOML y verificación SHA-256)
 docs/PLAN.md    Análisis, decisiones y plan por fases
+docs/PLUGINS.md Compatibilidad con plugins y sonda de pruebas
 ```
 
 ## Desarrollo (Windows)

@@ -11,7 +11,7 @@ mod vst3;
 
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
@@ -21,6 +21,7 @@ use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, 
 use clap_sys::ext::gui::{clap_plugin_gui, clap_window, CLAP_EXT_GUI, CLAP_WINDOW_API_WIN32};
 use clap_sys::ext::params::{clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
+use clap_sys::ext::thread_check::{clap_host_thread_check, CLAP_EXT_THREAD_CHECK};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
 use clap_sys::host::clap_host;
 use clap_sys::id::clap_id;
@@ -30,6 +31,21 @@ use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 
 pub const CLAP_ID: &CStr = c"org.musicnova.test-gain";
+
+/// Incumplimientos de los estándares que el plugin detecta en el anfitrión
+/// (función llamada en un hilo indebido, falta de una interfaz obligatoria…).
+/// Las pruebas lo leen con `mn_test_violations`.
+static VIOLATIONS: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn violation(what: &str) {
+    eprintln!("[mn-testplugin] el anfitrión incumple el estándar: {what}");
+    VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+}
+
+#[no_mangle]
+pub extern "C" fn mn_test_violations() -> u32 {
+    VIOLATIONS.load(Ordering::SeqCst)
+}
 
 struct SyncDesc(clap_plugin_descriptor);
 unsafe impl Sync for SyncDesc {}
@@ -56,6 +72,7 @@ const PARAM_INVERT: clap_id = 1;
 
 struct Plugin {
     plugin: clap_plugin,
+    host: *const clap_host,
     gain_db: AtomicU64,
     invert: AtomicBool,
     gui: Mutex<Option<isize>>,
@@ -64,6 +81,17 @@ struct Plugin {
 impl Plugin {
     unsafe fn from<'a>(p: *const clap_plugin) -> &'a Plugin {
         &*((*p).plugin_data as *const Plugin)
+    }
+
+    /// Comprueba con `clap.thread-check` que estamos en el hilo de audio.
+    unsafe fn expect_audio_thread(&self, what: &str) {
+        let Some(get) = (*self.host).get_extension else { return };
+        let tc = get(self.host, CLAP_EXT_THREAD_CHECK.as_ptr()) as *const clap_host_thread_check;
+        if let Some(f) = tc.as_ref().and_then(|t| t.is_audio_thread) {
+            if !f(self.host) {
+                violation(&format!("{what} fuera del hilo de audio"));
+            }
+        }
     }
 
     fn set_param(&self, id: clap_id, value: f64) {
@@ -107,8 +135,12 @@ unsafe extern "C" fn deactivate(_p: *const clap_plugin) {}
 unsafe extern "C" fn start_processing(_p: *const clap_plugin) -> bool {
     true
 }
-unsafe extern "C" fn stop_processing(_p: *const clap_plugin) {}
-unsafe extern "C" fn reset(_p: *const clap_plugin) {}
+unsafe extern "C" fn stop_processing(p: *const clap_plugin) {
+    Plugin::from(p).expect_audio_thread("stop_processing");
+}
+unsafe extern "C" fn reset(p: *const clap_plugin) {
+    Plugin::from(p).expect_audio_thread("reset");
+}
 
 unsafe extern "C" fn process(p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
     let me = Plugin::from(p);
@@ -387,7 +419,7 @@ unsafe extern "C" fn factory_descriptor(_f: *const clap_plugin_factory, index: u
         ptr::null()
     }
 }
-unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, _host: *const clap_host, id: *const c_char) -> *const clap_plugin {
+unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const clap_host, id: *const c_char) -> *const clap_plugin {
     if CStr::from_ptr(id) != CLAP_ID {
         return ptr::null();
     }
@@ -406,6 +438,7 @@ unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, _host: *cons
             get_extension: Some(get_extension),
             on_main_thread: Some(on_main_thread),
         },
+        host,
         gain_db: AtomicU64::new(0f64.to_bits()),
         invert: AtomicBool::new(false),
         gui: Mutex::new(None),
