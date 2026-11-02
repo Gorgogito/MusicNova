@@ -41,6 +41,8 @@ export function channelTargets(effects: EffectSlot[], master: boolean): TargetIn
   const out = master ? [VOLUME] : [VOLUME, PAN]
   const seen: Record<string, number> = {}
   for (const slot of effects) {
+    // Los parámetros de plugins externos aún no se automatizan.
+    if (slot.params.type === 'plugin') continue
     const type = slot.params.type
     seen[type] = (seen[type] ?? 0) + 1
     const name = `${EFFECT_LABELS[type]}${effects.filter((e) => e.params.type === type).length > 1 ? ` ${seen[type]}` : ''}`

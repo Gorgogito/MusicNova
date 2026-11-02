@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 mn-core = { path = "../../crates/mn-core" }
 mn-engine = { path = "../../crates/mn-engine" }
 mn-fx = { path = "../../crates/mn-fx" }
+mn-plugin = { path = "../../crates/mn-plugin" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

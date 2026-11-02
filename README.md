@@ -13,6 +13,7 @@ app/            Interfaz (React + TypeScript) y shell de escritorio (Tauri 2, ap
 crates/mn-core    Decodificación, remuestreo, formas de onda y formato de proyecto
 crates/mn-engine  Motor de audio en tiempo real (cpal, mezcla sin bloqueos, bucle, metrónomo,
                   grabación con monitorización y compensación de latencia)
+crates/mn-plugin  Alojamiento de plugins CLAP y VST3 (escaneo aislado, interfaz nativa, estado)
 crates/mn-stretch Tempo y tono en tiempo real (Signalsmith Stretch, binding sin bindgen)
 ai-worker/      Proceso de IA en Python (JSON-RPC por stdin/stdout, trabajos cancelables,
                 gestor de modelos con manifiestos TOML y verificación SHA-256)

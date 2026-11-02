@@ -1,0 +1,18 @@
+[package]
+name = "mn-plugin"
+description = "MusicNova: alojamiento de plugins de audio CLAP y VST3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mn-fx = { path = "../mn-fx" }
+clap-sys = "0.5"
+vst3 = "0.3"
+libloading = "0.8"
+rtrb = "0.3"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }

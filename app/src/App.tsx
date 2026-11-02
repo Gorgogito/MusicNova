@@ -92,6 +92,7 @@ export default function App() {
       try {
         const p = await action()
         setProject(p)
+        p.plugin_errors.forEach((e) => showError(`Plugin no disponible (suena sin procesar): ${e}`))
         setTransport({ ...IDLE, duration: timelineEnd(p.tracks) })
         setView('studio')
       } catch (e) {

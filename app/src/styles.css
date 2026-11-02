@@ -1690,3 +1690,44 @@ input.num.wide {
 .master-lane .compact-header {
   justify-content: space-between;
 }
+
+/* ---------- Plugins ---------- */
+.plugins-card {
+  grid-column: 1 / -1;
+}
+.folder-list,
+.plugin-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.folder-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  word-break: break-all;
+}
+.plugin-list {
+  max-height: 220px;
+  overflow: auto;
+}
+.plugin-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plugin-filter {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+}
+.fx header strong.ellipsis {
+  min-width: 0;
+  flex: 1;
+}

@@ -1,7 +1,10 @@
 //! Aplicación de escritorio MusicNova: une la interfaz, el motor de audio,
 //! los proyectos y el proceso de IA.
 
+mod plugins;
 mod worker;
+
+pub use plugins::scan_subprocess_main;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -83,6 +86,8 @@ struct ProjectView {
     sample_rate: u32,
     analysis: Option<Analysis>,
     lyrics: Option<Lyrics>,
+    /// Plugins que no se pudieron cargar (suenan sin procesar).
+    plugin_errors: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -162,6 +167,10 @@ fn prepare_tracks(dir: &Path, project: &Project, rate: u32) -> Result<Vec<(Audio
 fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Result<ProjectView, String> {
     let engine = state.engine()?;
     let rate = engine.sample_rate();
+    // El estado de los plugins del proyecto que se cierra no debe perderse.
+    if let Err(e) = sync_plugin_states(state) {
+        eprintln!("[musicnova] estado de plugins: {e}");
+    }
     let prepared = prepare_tracks(&dir, &project, rate)?;
     // Proyectos anteriores a los clips (o clips que no encajan con el audio).
     let mut normalized = false;
@@ -206,6 +215,8 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
     let length = timeline_length(&project, &buffers, rate);
     apply_practice(engine, &project.practice, None, analysis.as_ref(), length)?;
 
+    let slot_ids = plugin_slot_ids(&project);
+    mn_plugin::retain_instances(|id| slot_ids.iter().any(|s| s == id));
     let view = ProjectView {
         dir: dir.display().to_string(),
         project: project.clone(),
@@ -213,6 +224,7 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
         sample_rate: rate,
         analysis: analysis.clone(),
         lyrics,
+        plugin_errors: plugin_errors(&project),
     };
     let mut s = state.session.lock().unwrap();
     s.dir = Some(dir);
@@ -222,6 +234,57 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
     s.native_rate = native_rate;
     s.analysis = analysis;
     Ok(view)
+}
+
+/// Efectos con plugin externo de todo el proyecto (pistas y máster).
+fn plugin_slot_ids(project: &Project) -> Vec<String> {
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| t.effects.iter())
+        .chain(project.master.effects.iter())
+        .filter(|s| s.plugin.is_some())
+        .map(|s| s.id.clone())
+        .collect()
+}
+
+fn plugin_errors(project: &Project) -> Vec<String> {
+    let channels = project.tracks.iter().map(|t| (t.name.as_str(), &t.effects)).chain(std::iter::once(("Máster", &project.master.effects)));
+    let mut out = Vec::new();
+    for (name, effects) in channels {
+        for s in effects {
+            if let (Some(p), Some(e)) = (&s.plugin, mn_plugin::load_error(&s.id)) {
+                out.push(format!("{name} · {}: {e}", p.name));
+            }
+        }
+    }
+    out
+}
+
+/// Copia al proyecto el estado actual de sus plugins y lo guarda. Nunca
+/// espera al hilo principal con el cerrojo de la sesión tomado.
+fn sync_plugin_states(state: &AppState) -> Result<(), String> {
+    let mut effects: Vec<EffectSlot> = {
+        let s = state.session.lock().unwrap();
+        let Some(p) = s.project.as_ref() else { return Ok(()) };
+        p.tracks.iter().flat_map(|t| t.effects.iter()).chain(p.master.effects.iter()).filter(|e| e.plugin.is_some()).cloned().collect()
+    };
+    if effects.is_empty() || !mn_plugin::sync_states(&mut effects) {
+        return Ok(());
+    }
+    let mut guard = state.session.lock().unwrap();
+    let s = &mut *guard;
+    let (Some(p), Some(dir)) = (s.project.as_mut(), s.dir.clone()) else { return Ok(()) };
+    for slot in p.tracks.iter_mut().flat_map(|t| t.effects.iter_mut()).chain(p.master.effects.iter_mut()) {
+        if let Some(fresh) = effects.iter().find(|e| e.id == slot.id) {
+            if let (Some(a), Some(b)) = (slot.plugin.as_mut(), fresh.plugin.as_ref()) {
+                if a.path == b.path && a.id == b.id {
+                    a.state = b.state.clone();
+                }
+            }
+        }
+    }
+    p.save(&dir).map_err(err)
 }
 
 /// Añade una pista al motor con su desfase, volumen, panorama y efectos.
@@ -823,6 +886,7 @@ const MASTER_DIR: &str = "audio/master/";
 /// máster ni los masters ya generados. Devuelve el audio a la frecuencia del motor.
 fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, u32), String> {
     let rate = state.engine()?.sample_rate();
+    sync_plugin_states(state)?;
     let (dir, project, buffers, native_rate) = {
         let s = state.session.lock().unwrap();
         let p = s.project.clone().ok_or("no hay ningún proyecto abierto")?;
@@ -975,7 +1039,7 @@ async fn master_reference_apply(app: AppHandle, output: String, reference_name: 
 #[tauri::command]
 fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<EffectSlot>) -> Result<Vec<EffectSlot>, String> {
     let engine = state.engine()?;
-    let effects: Vec<EffectSlot> = effects
+    let mut effects: Vec<EffectSlot> = effects
         .into_iter()
         .take(16)
         .map(|mut s| {
@@ -983,6 +1047,8 @@ fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<
             s
         })
         .collect();
+    // Comando síncrono: corre en el hilo principal, así que consultar los plugins no espera a nadie.
+    mn_plugin::sync_states(&mut effects);
     let mut guard = state.session.lock().unwrap();
     let s = &mut *guard;
     let engine_id = match track_id {
@@ -1011,6 +1077,8 @@ fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<
         *lanes = sanitize_lanes(std::mem::take(lanes), &effects);
         engine.set_automation(engine_id, ChannelAutomation::build(lanes, &effects, engine.sample_rate())).map_err(err)?;
     }
+    let slot_ids = plugin_slot_ids(project);
+    mn_plugin::retain_instances(|id| slot_ids.iter().any(|s| s == id));
     if let Some(dir) = s.dir.clone() {
         project.save(&dir).map_err(err)?;
     }
@@ -1061,6 +1129,7 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let rate = state.engine()?.sample_rate();
+        sync_plugin_states(&state)?;
         let (project, buffers, native_rate) = {
             let s = state.session.lock().unwrap();
             let p = s.project.clone().ok_or("no hay ningún proyecto abierto")?;
@@ -1309,6 +1378,8 @@ fn track_remove(state: State<'_, AppState>, track_id: Uuid) -> Result<(), String
     s.buffers.remove(&track_id);
     let track = project.tracks.remove(index);
     project.save(&dir).map_err(err)?;
+    let slot_ids = plugin_slot_ids(project);
+    mn_plugin::retain_instances(|id| slot_ids.iter().any(|s| s == id));
     if track.file.starts_with(RECORDINGS_DIR) {
         let _ = std::fs::remove_file(project.track_path(&dir, &track));
     }
@@ -1382,6 +1453,17 @@ pub fn run() {
                 eprintln!("[musicnova] {e}");
             }
             app.manage(AppState { engine, engine_error, session: Mutex::new(Session::default()), worker, projects_root });
+            // Plugins: las llamadas de «hilo principal» van al bucle de la ventana.
+            let handle = app.handle().clone();
+            mn_plugin::set_main_thread_executor(move |f| {
+                let _ = handle.run_on_main_thread(f);
+            });
+            mn_plugin::install();
+            plugins::on_editor_closed(app.handle().clone());
+            #[cfg(windows)]
+            if let Some(hwnd) = app.get_webview_window("main").and_then(|w| w.hwnd().ok()) {
+                mn_plugin::set_owner_window(hwnd.0 as isize);
+            }
             spawn_transport_events(app.handle().clone());
             Ok(())
         })
@@ -1425,12 +1507,21 @@ pub fn run() {
             track_remove,
             clips_set,
             automation_set,
+            plugins::plugins_list,
+            plugins::plugins_scan,
+            plugins::plugin_open_editor,
+            plugins::plugin_params,
+            plugins::plugin_param_set,
+            plugins::plugins_sync,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");
 
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
+            if let Err(e) = sync_plugin_states(&handle.state::<AppState>()) {
+                eprintln!("[musicnova] estado de plugins: {e}");
+            }
             if let Some(e) = handle.state::<AppState>().engine.as_ref() {
                 e.close_input();
             }

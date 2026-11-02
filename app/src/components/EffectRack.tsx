@@ -11,6 +11,8 @@ import {
   toSlider,
 } from '../lib/effects'
 import { Icon } from './Icon'
+import { PluginControls } from './PluginControls'
+import { FORMAT_LABEL, pluginSlot, usePlugins } from '../lib/plugins'
 
 interface Props {
   effects: EffectSlot[]
@@ -19,6 +21,8 @@ interface Props {
 
 /** Cadena de efectos editable: añadir, ordenar, activar, quitar y ajustar. */
 export function EffectRack({ effects, onChange }: Props) {
+  const { cache } = usePlugins()
+  const plugins = cache?.plugins ?? []
   const update = (i: number, slot: EffectSlot) => onChange(effects.map((s, j) => (j === i ? slot : s)))
   const move = (i: number, d: -1 | 1) => {
     const next = [...effects]
@@ -31,6 +35,7 @@ export function EffectRack({ effects, onChange }: Props) {
       {effects.length === 0 && <span className="small muted">Sin efectos. Añade uno para empezar.</span>}
       {effects.map((slot, i) => {
         const type = slot.params.type
+        const plugin = type === 'plugin' ? slot.plugin : undefined
         const delay = slot.params.type === 'delay' ? slot.params : null
         const limiter = slot.params.type === 'limiter' ? slot.params : null
         return (
@@ -40,7 +45,14 @@ export function EffectRack({ effects, onChange }: Props) {
                 <input type="checkbox" checked={slot.enabled} onChange={(e) => update(i, { ...slot, enabled: e.target.checked })} />
                 <span />
               </label>
-              <strong>{EFFECT_LABELS[type]}</strong>
+              {type === 'plugin' ? (
+                <strong className="ellipsis" title={plugin ? `${plugin.name} · ${plugin.vendor}
+${plugin.path}` : ''}>
+                  {plugin?.name ?? 'Plugin'} <span className="badge">{plugin ? FORMAT_LABEL[plugin.format] : '?'}</span>
+                </strong>
+              ) : (
+                <strong>{EFFECT_LABELS[type]}</strong>
+              )}
               <div className="fx-actions">
                 <button className="icon-btn" title="Subir" disabled={i === 0} onClick={() => move(i, -1)}>
                   ↑
@@ -53,6 +65,9 @@ export function EffectRack({ effects, onChange }: Props) {
                 </button>
               </div>
             </header>
+            {type === 'plugin' ? (
+              <PluginControls slotId={slot.id} />
+            ) : (
             <div className="fx-controls">
               {CONTROLS[type].map((c) => {
                 const v = getParam(slot.params, c.path)
@@ -91,22 +106,43 @@ export function EffectRack({ effects, onChange }: Props) {
                 </label>
               )}
             </div>
+            )}
           </section>
         )
       })}
       <select
         className="compact"
         value=""
-        onChange={(e) => e.target.value && onChange([...effects, newSlot(e.target.value as EffectType)])}
+        onChange={(e) => {
+          const v = e.target.value
+          if (!v) return
+          if (v.startsWith('plugin:')) {
+            const d = plugins[Number(v.slice(7))]
+            if (d) onChange([...effects, pluginSlot(d)])
+          } else onChange([...effects, newSlot(v as EffectType)])
+        }}
         aria-label="Añadir efecto"
         disabled={effects.length >= 16}
       >
         <option value="">+ Añadir efecto…</option>
-        {EFFECT_ORDER.map((t) => (
-          <option key={t} value={t}>
-            {EFFECT_LABELS[t]}
-          </option>
-        ))}
+        <optgroup label="MusicNova">
+          {EFFECT_ORDER.map((t) => (
+            <option key={t} value={t}>
+              {EFFECT_LABELS[t]}
+            </option>
+          ))}
+        </optgroup>
+        {plugins.length > 0 ? (
+          <optgroup label="Plugins">
+            {plugins.map((d, k) => (
+              <option key={`${d.format}:${d.path}:${d.id}`} value={`plugin:${k}`}>
+                {d.name} · {d.vendor} ({FORMAT_LABEL[d.format]})
+              </option>
+            ))}
+          </optgroup>
+        ) : (
+          <option disabled>Plugins: escanéalos en «Sistema»</option>
+        )}
       </select>
     </div>
   )

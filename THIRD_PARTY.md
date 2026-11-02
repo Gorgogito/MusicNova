@@ -11,6 +11,7 @@ compatibles.
 | Beat This! (`beat_tracker.py`, `roformer.py`) | `ai-worker/musicnova_ai/vendor/beat_this/` | MIT | CPJKU/beat_this, commit `b95c8ab0` |
 | Signalsmith Stretch y Signalsmith Linear (cabeceras C++) | `crates/mn-stretch/vendor/` | MIT | Signalsmith Audio, vía signalsmith-stretch-rs 0.1.3 |
 | Envoltura C de Signalsmith Stretch | `crates/mn-stretch/vendor/wrapper/` | MIT | Colin Marc (signalsmith-stretch-rs) |
+| Plugin VST3 de ganancia de ejemplo (solo pruebas, adaptado con estado) | `crates/mn-testplugin/src/vst3.rs` | MIT OR Apache-2.0 | Micah Johnston, vst3-rs 0.3.0 `examples/gain.rs` |
 
 Algoritmos implementados desde cero en `crates/mn-fx`: filtros del «Audio EQ Cookbook» (R. Bristow-Johnson), reverb según Freeverb (Jezar at Dreampoint, dominio público) y medición de sonoridad según ITU-R BS.1770-4 / EBU R128 (derivación de la ponderación K como en libebur128).
 
@@ -20,6 +21,9 @@ Algoritmos implementados desde cero en `crates/mn-fx`: filtros del «Audio EQ Co
 |---|---|---|
 | Tauri, symphonia, rubato, cpal, rtrb | Aplicación y motor de audio | MIT / Apache-2.0 / MPL-2.0 |
 | flacenc | Exportación FLAC | Apache-2.0 |
+| clap-sys | Alojamiento de plugins CLAP | MIT / Apache-2.0 |
+| vst3 (vst3-rs, enlaces del VST 3 SDK 3.8), com-scrape-types | Alojamiento de plugins VST3 | MIT / Apache-2.0 (el SDK de Steinberg es MIT desde la versión 3.8) |
+| libloading, base64, windows-sys | Carga de plugins, estado y ventanas de sus interfaces | ISC / MIT / MIT o Apache-2.0 |
 | LAME (vía mp3lame-encoder) | Exportación MP3 | LGPL-3.0 |
 | PyTorch, torchaudio | Inferencia de IA | BSD-3-Clause |
 | Demucs, openunmix, dora-search | Separación de stems | MIT |

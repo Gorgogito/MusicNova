@@ -2,6 +2,110 @@ import { useEffect, useState } from 'react'
 import { api, errorMessage, type AppInfo, type SystemInfo, type WorkerStatus } from '../lib/api'
 import { formatBytes } from '../lib/format'
 import { Icon } from '../components/Icon'
+import { open } from '@tauri-apps/plugin-dialog'
+import { FORMAT_LABEL, scanPlugins, usePlugins } from '../lib/plugins'
+import { formatDate } from '../lib/format'
+
+/** Carpetas, escaneo y resultado de los plugins CLAP/VST3. */
+function PluginsCard({ onError }: { onError: (m: string) => void }) {
+  const { cache, scanning } = usePlugins()
+  const [edited, setEdited] = useState<string[] | null>(null)
+  const folders = edited ?? cache?.folders ?? []
+  const [showFailed, setShowFailed] = useState(false)
+  const count = (f: 'clap' | 'vst3') => cache?.plugins.filter((p) => p.format === f).length ?? 0
+
+  const addFolder = async () => {
+    const dir = await open({ directory: true, multiple: false })
+    if (typeof dir === 'string' && !folders.includes(dir)) setEdited([...folders, dir])
+  }
+
+  return (
+    <article className="card plugins-card">
+      <div className="model-head">
+        <h3>Plugins CLAP y VST3</h3>
+        {cache?.scanned_at && <span className="badge">{cache.plugins.length} efectos</span>}
+      </div>
+      <p className="small muted">
+        Se buscan en las carpetas estándar y en las que añadas. Cada archivo se examina en un proceso aparte, así que un
+        plugin defectuoso no cierra MusicNova durante el escaneo. Al usarlos, los plugins se ejecutan dentro de la app.
+      </p>
+      <ul className="folder-list small">
+        {(cache?.default_folders ?? []).map((f) => (
+          <li key={f} className="muted mono">
+            {f}
+          </li>
+        ))}
+        {folders.map((f) => (
+          <li key={f} className="mono">
+            {f}
+            <button className="icon-btn small" title="Quitar carpeta" onClick={() => setEdited(folders.filter((x) => x !== f))}>
+              <Icon name="x" size={12} />
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="panel-row">
+        <button className="btn ghost small" onClick={addFolder} disabled={!!scanning}>
+          <Icon name="folder" size={14} /> Añadir carpeta
+        </button>
+        <button
+          className="btn primary small"
+          disabled={!!scanning}
+          onClick={() =>
+            scanPlugins(folders)
+              .then(() => setEdited(null))
+              .catch((e) => onError(errorMessage(e)))
+          }
+        >
+          <Icon name="refresh" size={14} /> {cache?.scanned_at ? 'Volver a escanear' : 'Escanear'}
+        </button>
+      </div>
+      {scanning && (
+        <div className="job">
+          <span className="small muted ellipsis">
+            {scanning.total ? `${scanning.done} de ${scanning.total} · ${scanning.current.split(/[\\/]/).pop()}` : 'Buscando archivos…'}
+          </span>
+          <span />
+          <div className="progress">
+            <div style={{ width: `${scanning.total ? (scanning.done / scanning.total) * 100 : 0}%` }} />
+          </div>
+        </div>
+      )}
+      {cache?.scanned_at && !scanning && (
+        <>
+          <p className="small">
+            {count('clap')} CLAP · {count('vst3')} VST3 · último escaneo {formatDate(cache.scanned_at)}
+          </p>
+          {cache.plugins.length > 0 && (
+            <ul className="plugin-list small">
+              {cache.plugins.map((p) => (
+                <li key={`${p.format}:${p.path}:${p.id}`}>
+                  <span className="badge">{FORMAT_LABEL[p.format]}</span> {p.name} <span className="muted">· {p.vendor}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {cache.failed.length > 0 && (
+            <>
+              <button className="link small" onClick={() => setShowFailed(!showFailed)}>
+                {cache.failed.length} {cache.failed.length === 1 ? 'archivo no se pudo cargar' : 'archivos no se pudieron cargar'}
+              </button>
+              {showFailed && (
+                <ul className="plugin-list small">
+                  {cache.failed.map((f) => (
+                    <li key={f.path} title={f.path}>
+                      <span className="mono">{f.path.split(/[\\/]/).pop()}</span> <span className="muted">· {f.error}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </article>
+  )
+}
 
 const STATE_LABEL: Record<WorkerStatus['state'], string> = {
   stopped: 'Detenido',
@@ -91,6 +195,8 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
             <dd className="small">{sys?.platform ?? '—'}</dd>
           </dl>
         </article>
+
+        <PluginsCard onError={onError} />
       </div>
     </section>
   )

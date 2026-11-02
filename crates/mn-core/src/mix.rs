@@ -153,7 +153,7 @@ pub fn mixdown(
         }
         let (fader, pan) = (db_to_gain(t.gain_db), t.pan);
         let (gl, gr) = balance_gains(fader, t.pan);
-        let mut chain = (!t.effects.is_empty()).then(|| Chain::new(t.effects, sample_rate));
+        let mut chain = (!t.effects.is_empty()).then(|| Chain::new_offline(t.effects, sample_rate));
         // Se procesa toda la longitud de la mezcla para no cortar colas de reverb o delay.
         for (start, out) in (0..len).step_by(BLOCK * 2).zip(data.chunks_mut(BLOCK * 2)) {
             let n = out.len();
@@ -175,7 +175,7 @@ pub fn mixdown(
             }
         }
     }
-    let mut chain = (!master.effects.is_empty()).then(|| Chain::new(&master.effects, sample_rate));
+    let mut chain = (!master.effects.is_empty()).then(|| Chain::new_offline(&master.effects, sample_rate));
     let g = db_to_gain(master.gain_db);
     for (b, chunk) in data.chunks_mut(BLOCK * 2).enumerate() {
         let f0 = (b * BLOCK) as u64;
@@ -331,7 +331,7 @@ mod tests {
             })
             .collect();
         let lim = |ceiling_db| {
-            vec![EffectSlot {
+            vec![EffectSlot { plugin: None,
                 id: "l".into(),
                 enabled: true,
                 params: EffectParams::Limiter(LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0, true_peak: false }),

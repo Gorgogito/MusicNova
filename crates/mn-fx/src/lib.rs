@@ -13,6 +13,8 @@ mod limiter;
 pub mod loudness;
 mod reverb;
 
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 pub use compressor::Compressor;
@@ -137,6 +139,8 @@ pub enum EffectParams {
     Reverb(ReverbParams),
     Delay(DelayParams),
     Limiter(LimiterParams),
+    /// Plugin externo (CLAP o VST3); cuál es lo indica `EffectSlot::plugin`.
+    Plugin,
 }
 
 impl EffectParams {
@@ -147,6 +151,7 @@ impl EffectParams {
             Self::Reverb(_) => "reverb",
             Self::Delay(_) => "delay",
             Self::Limiter(_) => "limiter",
+            Self::Plugin => "plugin",
         }
     }
 
@@ -193,6 +198,7 @@ impl EffectParams {
                 release_ms: p.release_ms.clamp(5.0, 1000.0),
                 true_peak: p.true_peak,
             }),
+            Self::Plugin => Self::Plugin,
         }
     }
 }
@@ -220,6 +226,7 @@ impl EffectParams {
             Self::Reverb(_) => &["room_size", "damping", "width", "predelay_ms", "mix"],
             Self::Delay(_) => &["time_ms", "feedback", "high_cut", "mix"],
             Self::Limiter(_) => &["input_db", "ceiling_db", "release_ms"],
+            Self::Plugin => &[],
         }
     }
 
@@ -274,6 +281,7 @@ impl EffectParams {
                 "release_ms" => Some(&mut p.release_ms),
                 _ => None,
             },
+            Self::Plugin => None,
         }
     }
 
@@ -298,6 +306,59 @@ pub struct EffectSlot {
     pub id: String,
     pub enabled: bool,
     pub params: EffectParams,
+    /// Plugin externo y su estado (solo si `params` es `Plugin`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginRef>,
+}
+
+/// Referencia a un plugin externo tal como se guarda en el proyecto.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginRef {
+    /// "clap" o "vst3".
+    pub format: String,
+    /// Archivo (o carpeta .vst3) del plugin.
+    pub path: String,
+    /// Identificador del plugin dentro del archivo.
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub vendor: String,
+    /// Estado del plugin en base64 (lo que el plugin guarda de sí mismo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+/// Crea el procesador de un plugin externo. `realtime` distingue la instancia
+/// del motor (que se reutiliza y se puede abrir en pantalla) de las que se
+/// crean para exportar.
+pub type PluginFactory = dyn Fn(&EffectSlot, u32, bool) -> Option<Box<dyn Processor>> + Send + Sync;
+
+static PLUGIN_FACTORY: OnceLock<Box<PluginFactory>> = OnceLock::new();
+
+/// Registra quién crea los plugins externos (lo hace la aplicación al arrancar).
+pub fn set_plugin_factory(f: Box<PluginFactory>) -> bool {
+    PLUGIN_FACTORY.set(f).is_ok()
+}
+
+/// Deja pasar la señal sin tocarla (plugin que no se pudo cargar).
+pub struct Bypass;
+
+impl Processor for Bypass {
+    fn process(&mut self, _buf: &mut [f32]) {}
+    fn reset(&mut self) {}
+    fn set_params(&mut self, params: &EffectParams) -> bool {
+        matches!(params, EffectParams::Plugin)
+    }
+}
+
+fn build_slot(slot: &EffectSlot, sample_rate: u32, realtime: bool) -> Box<dyn Processor> {
+    match slot.params {
+        EffectParams::Plugin => PLUGIN_FACTORY
+            .get()
+            .and_then(|f| f(slot, sample_rate, realtime))
+            .unwrap_or_else(|| Box::new(Bypass)),
+        _ => build(&slot.params, sample_rate),
+    }
 }
 
 /// Procesador de audio estéreo entrelazado.
@@ -318,6 +379,7 @@ pub fn build(params: &EffectParams, sample_rate: u32) -> Box<dyn Processor> {
         EffectParams::Reverb(p) => Box::new(Reverb::new(p, sr)),
         EffectParams::Delay(p) => Box::new(Delay::new(p, sr)),
         EffectParams::Limiter(p) => Box::new(Limiter::new(p, sr)),
+        EffectParams::Plugin => Box::new(Bypass),
     }
 }
 
@@ -327,8 +389,15 @@ pub struct Chain {
 }
 
 impl Chain {
+    /// Cadena para el motor en tiempo real.
     pub fn new(slots: &[EffectSlot], sample_rate: u32) -> Self {
-        Self { slots: slots.iter().map(|s| (s.enabled, build(&s.params, sample_rate))).collect() }
+        Self { slots: slots.iter().map(|s| (s.enabled, build_slot(s, sample_rate, true))).collect() }
+    }
+
+    /// Cadena para procesar offline (exportar): los plugins externos son
+    /// instancias propias, independientes de las del motor.
+    pub fn new_offline(slots: &[EffectSlot], sample_rate: u32) -> Self {
+        Self { slots: slots.iter().map(|s| (s.enabled, build_slot(s, sample_rate, false))).collect() }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -386,7 +455,7 @@ mod tests {
 
     #[test]
     fn params_roundtrip_json() {
-        let slot = EffectSlot { id: "a".into(), enabled: true, params: EffectParams::Delay(DelayParams::default()) };
+        let slot = EffectSlot { plugin: None, id: "a".into(), enabled: true, params: EffectParams::Delay(DelayParams::default()) };
         let json = serde_json::to_string(&slot).unwrap();
         assert!(json.contains(r#""type":"delay""#), "{json}");
         let back: EffectSlot = serde_json::from_str(&json).unwrap();
@@ -426,8 +495,8 @@ mod tests {
     #[test]
     fn chain_runs_and_updates_in_place() {
         let slots = vec![
-            EffectSlot { id: "1".into(), enabled: true, params: EffectParams::Eq(EqParams::default()) },
-            EffectSlot { id: "2".into(), enabled: false, params: EffectParams::Reverb(ReverbParams::default()) },
+            EffectSlot { plugin: None, id: "1".into(), enabled: true, params: EffectParams::Eq(EqParams::default()) },
+            EffectSlot { plugin: None, id: "2".into(), enabled: false, params: EffectParams::Reverb(ReverbParams::default()) },
         ];
         let mut chain = Chain::new(&slots, 48_000);
         let mut buf = vec![0.25f32; 1024];

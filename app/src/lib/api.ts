@@ -18,13 +18,55 @@ export type EffectParams =
   | { type: 'reverb'; room_size: number; damping: number; width: number; predelay_ms: number; mix: number }
   | { type: 'delay'; time_ms: number; feedback: number; high_cut: number; ping_pong: boolean; mix: number }
   | { type: 'limiter'; input_db: number; ceiling_db: number; release_ms: number; true_peak: boolean }
+  | { type: 'plugin' }
 
-export type EffectType = EffectParams['type']
+/** Efectos propios (los plugins externos van aparte). */
+export type EffectType = Exclude<EffectParams['type'], 'plugin'>
 
 export interface EffectSlot {
   id: string
   enabled: boolean
   params: EffectParams
+  /** Plugin externo (solo si `params.type` es 'plugin'). */
+  plugin?: PluginRef
+}
+
+export interface PluginRef {
+  format: 'clap' | 'vst3'
+  path: string
+  id: string
+  name: string
+  vendor: string
+  state?: string | null
+}
+
+export interface PluginDescriptor {
+  format: 'clap' | 'vst3'
+  path: string
+  id: string
+  name: string
+  vendor: string
+  version: string
+  category: string
+}
+
+export interface PluginCache {
+  folders: string[]
+  plugins: PluginDescriptor[]
+  failed: { path: string; error: string }[]
+  scanned_at: string | null
+  default_folders: string[]
+}
+
+export interface PluginParam {
+  id: number
+  name: string
+  min: number
+  max: number
+  default: number
+  value: number
+  stepped: boolean
+  text: string
 }
 
 export interface LoudnessSummary {
@@ -227,6 +269,7 @@ export interface ProjectView {
   sample_rate: number
   analysis: Analysis | null
   lyrics: Lyrics | null
+  plugin_errors: string[]
 }
 
 export interface ProjectSummary {
@@ -423,6 +466,12 @@ export const api = {
   recordCalibrate: () => invoke<LatencyReport>('record_calibrate'),
   trackRemove: (trackId: string) => invoke<void>('track_remove', { trackId }),
   clipsSet: (trackId: string, clips: Clip[]) => invoke<Clip[]>('clips_set', { trackId, clips }),
+  pluginsList: () => invoke<PluginCache>('plugins_list'),
+  pluginsScan: (folders: string[]) => invoke<PluginCache>('plugins_scan', { folders }),
+  pluginOpenEditor: (slotId: string) => invoke<void>('plugin_open_editor', { slotId }),
+  pluginParams: (slotId: string) => invoke<PluginParam[]>('plugin_params', { slotId }),
+  pluginParamSet: (slotId: string, id: number, value: number) => invoke<void>('plugin_param_set', { slotId, id, value }),
+  pluginsSync: () => invoke<void>('plugins_sync'),
   automationSet: (trackId: string | null, lanes: AutomationLane[]) =>
     invoke<AutomationLane[]>('automation_set', { trackId, lanes }),
 }
@@ -434,6 +483,8 @@ export const events = {
     listen<WorkerEvent>('worker-event', (e) => cb(e.payload)),
   workerStatus: (cb: (s: WorkerStatus) => void): Promise<UnlistenFn> =>
     listen<WorkerStatus>('worker-status', (e) => cb(e.payload)),
+  pluginScan: (cb: (p: { done: number; total: number; current: string }) => void): Promise<UnlistenFn> =>
+    listen<{ done: number; total: number; current: string }>('plugin-scan', (e) => cb(e.payload)),
   recordFinished: (cb: (r: RecordFinished) => void): Promise<UnlistenFn> =>
     listen<RecordFinished>('record-finished', (e) => cb(e.payload)),
 }

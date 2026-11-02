@@ -23,7 +23,7 @@ const TARGETS = [
 ]
 
 const summary = (effects: EffectSlot[]) =>
-  effects.filter((e) => e.enabled).map((e) => EFFECT_LABELS[e.params.type]).join(' · ') || 'sin efectos'
+  effects.filter((e) => e.enabled).map((e) => (e.params.type === 'plugin' ? (e.plugin?.name ?? 'Plugin') : EFFECT_LABELS[e.params.type])).join(' · ') || 'sin efectos'
 
 export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffects, onMasterEffects, onMasterGain }: Props) {
   const track = selected ? tracks.find((t) => t.id === selected) : undefined

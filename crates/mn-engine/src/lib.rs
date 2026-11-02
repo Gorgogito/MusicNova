@@ -904,8 +904,8 @@ mod tests {
             enabled: true,
             points: pts.iter().map(|&(time, value)| AutoPoint { time, value }).collect(),
         };
-        let fx = vec![EffectSlot { id: "rv".into(), enabled: true, params: EffectParams::Reverb(mn_fx::ReverbParams::default()) }];
-        let master_fx = vec![EffectSlot { id: "eq".into(), enabled: true, params: EffectParams::Eq(mn_fx::EqParams::default()) }];
+        let fx = vec![EffectSlot { plugin: None, id: "rv".into(), enabled: true, params: EffectParams::Reverb(mn_fx::ReverbParams::default()) }];
+        let master_fx = vec![EffectSlot { plugin: None, id: "eq".into(), enabled: true, params: EffectParams::Eq(mn_fx::EqParams::default()) }];
         let lanes = vec![
             lane(AutomationTarget::Volume, &[(0.1, -20.0), (0.6, 3.0)]),
             lane(AutomationTarget::Pan, &[(0.0, -1.0), (0.8, 0.7)]),
@@ -1027,7 +1027,7 @@ mod tests {
     }
 
     fn limiter(ceiling_db: f32) -> Vec<EffectSlot> {
-        vec![EffectSlot {
+        vec![EffectSlot { plugin: None,
             id: "lim".into(),
             enabled: true,
             params: EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0, true_peak: false }),
