@@ -197,6 +197,100 @@ impl EffectParams {
     }
 }
 
+impl EffectParams {
+    /// Parámetros continuos que se pueden automatizar (ruta → mismo nombre que
+    /// en el JSON, con un nivel de anidación: "mid1.gain_db").
+    pub fn param_paths(&self) -> &'static [&'static str] {
+        match self {
+            Self::Eq(_) => &[
+                "highpass",
+                "low_shelf.freq",
+                "low_shelf.gain_db",
+                "mid1.freq",
+                "mid1.gain_db",
+                "mid1.q",
+                "mid2.freq",
+                "mid2.gain_db",
+                "mid2.q",
+                "high_shelf.freq",
+                "high_shelf.gain_db",
+                "lowpass",
+            ],
+            Self::Compressor(_) => &["threshold_db", "ratio", "attack_ms", "release_ms", "knee_db", "makeup_db"],
+            Self::Reverb(_) => &["room_size", "damping", "width", "predelay_ms", "mix"],
+            Self::Delay(_) => &["time_ms", "feedback", "high_cut", "mix"],
+            Self::Limiter(_) => &["input_db", "ceiling_db", "release_ms"],
+        }
+    }
+
+    /// Acceso a un parámetro por su ruta (sin reservar memoria).
+    pub fn param_mut(&mut self, path: &str) -> Option<&mut f32> {
+        fn band<'a>(b: &'a mut Band, field: &str) -> Option<&'a mut f32> {
+            match field {
+                "freq" => Some(&mut b.freq),
+                "gain_db" => Some(&mut b.gain_db),
+                "q" => Some(&mut b.q),
+                _ => None,
+            }
+        }
+        let (head, tail) = path.split_once('.').unwrap_or((path, ""));
+        match self {
+            Self::Eq(p) => match (head, tail) {
+                ("highpass", "") => Some(&mut p.highpass),
+                ("lowpass", "") => Some(&mut p.lowpass),
+                ("low_shelf", f) => band(&mut p.low_shelf, f),
+                ("mid1", f) => band(&mut p.mid1, f),
+                ("mid2", f) => band(&mut p.mid2, f),
+                ("high_shelf", f) => band(&mut p.high_shelf, f),
+                _ => None,
+            },
+            Self::Compressor(p) => match path {
+                "threshold_db" => Some(&mut p.threshold_db),
+                "ratio" => Some(&mut p.ratio),
+                "attack_ms" => Some(&mut p.attack_ms),
+                "release_ms" => Some(&mut p.release_ms),
+                "knee_db" => Some(&mut p.knee_db),
+                "makeup_db" => Some(&mut p.makeup_db),
+                _ => None,
+            },
+            Self::Reverb(p) => match path {
+                "room_size" => Some(&mut p.room_size),
+                "damping" => Some(&mut p.damping),
+                "width" => Some(&mut p.width),
+                "predelay_ms" => Some(&mut p.predelay_ms),
+                "mix" => Some(&mut p.mix),
+                _ => None,
+            },
+            Self::Delay(p) => match path {
+                "time_ms" => Some(&mut p.time_ms),
+                "feedback" => Some(&mut p.feedback),
+                "high_cut" => Some(&mut p.high_cut),
+                "mix" => Some(&mut p.mix),
+                _ => None,
+            },
+            Self::Limiter(p) => match path {
+                "input_db" => Some(&mut p.input_db),
+                "ceiling_db" => Some(&mut p.ceiling_db),
+                "release_ms" => Some(&mut p.release_ms),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn param(&self, path: &str) -> Option<f32> {
+        let mut copy = *self;
+        copy.param_mut(path).map(|v| *v)
+    }
+
+    /// Copia con un parámetro cambiado (ya limitado a su rango).
+    pub fn with_param(mut self, path: &str, value: f32) -> Self {
+        if let Some(v) = self.param_mut(path) {
+            *v = value;
+        }
+        self.sanitized()
+    }
+}
+
 /// Un efecto en una cadena, tal como se guarda en el proyecto.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectSlot {
@@ -300,6 +394,26 @@ mod tests {
         // Los parámetros que falten toman el valor por defecto.
         let p: EffectParams = serde_json::from_str(r#"{"type":"compressor","ratio":8}"#).unwrap();
         assert_eq!(p, EffectParams::Compressor(CompressorParams { ratio: 8.0, ..Default::default() }));
+    }
+
+    #[test]
+    fn params_by_path() {
+        for p in [
+            EffectParams::Eq(EqParams::default()),
+            EffectParams::Compressor(CompressorParams::default()),
+            EffectParams::Reverb(ReverbParams::default()),
+            EffectParams::Delay(DelayParams::default()),
+            EffectParams::Limiter(LimiterParams::default()),
+        ] {
+            for path in p.param_paths() {
+                assert!(p.param(path).is_some(), "{} {path}", p.kind());
+            }
+            assert!(p.param("no_existe").is_none());
+        }
+        let p = EffectParams::Eq(EqParams::default()).with_param("mid1.gain_db", 30.0);
+        assert_eq!(p.param("mid1.gain_db"), Some(18.0), "se limita al rango");
+        let p = EffectParams::Reverb(ReverbParams::default()).with_param("mix", 0.4);
+        assert_eq!(p.param("mix"), Some(0.4));
     }
 
     #[test]

@@ -95,6 +95,7 @@ pub struct RtState {
     /// Audio de una pista para procesar su cadena de efectos.
     track_buf: Vec<f32>,
     master_chain: Option<Box<Chain>>,
+    master_automation: Option<Box<mn_core::automation::ChannelAutomation>>,
     meter: LoudnessMeter,
 
     // Grabación.
@@ -150,6 +151,7 @@ impl RtState {
             src_pos: vec![u64::MAX; MAX_IN_FRAMES],
             track_buf: vec![0.0; MAX_IN_FRAMES * 2],
             master_chain: None,
+            master_automation: None,
             meter: LoudnessMeter::new(sample_rate),
             free_run: false,
             announce_start: false,
@@ -342,6 +344,18 @@ impl RtState {
                     self.discard(Garbage::Clips(old));
                 }
             }
+            Command::SetAutomation(target, automation) => {
+                let old = match target {
+                    None => std::mem::replace(&mut self.master_automation, automation),
+                    Some(id) => match find(&mut self.tracks, id) {
+                        Some(t) => std::mem::replace(&mut t.automation, automation),
+                        None => automation,
+                    },
+                };
+                if let Some(a) = old {
+                    self.discard(Garbage::Automation(a));
+                }
+            }
             Command::SetFreeRun(on) => self.free_run = on,
             Command::AttachMonitor(m) => {
                 if let Some(old) = self.monitor.replace(m) {
@@ -413,18 +427,31 @@ impl RtState {
         let out = if into_scratch_in { &mut self.scratch_in } else { &mut self.scratch_out };
         out[..frames * 2].fill(0.0);
         let track_buf = &mut self.track_buf[..frames * 2];
+        // Posiciones de la línea de tiempo al principio y al final del bloque (automatización).
+        let src = &self.src_pos[..frames];
+        let span = src.iter().position(|&p| p != u64::MAX).map(|i| {
+            let last = src.iter().rposition(|&p| p != u64::MAX).unwrap_or(i);
+            (src[i], src[last] + 1)
+        });
         for t in &mut self.tracks {
             if t.mute || (any_solo && !t.solo) {
                 continue;
             }
             track_buf.fill(0.0);
-            mn_core::mix::render_clips(&t.data, &t.clips, &self.src_pos[..frames], track_buf);
+            mn_core::mix::render_clips(&t.data, &t.clips, src, track_buf);
+            let auto = t.automation.as_deref().zip(span);
             if let Some(chain) = t.chain.as_deref_mut() {
+                if let Some((a, (p0, _))) = auto {
+                    a.apply_effects(chain, p0);
+                }
                 chain.process(track_buf);
             }
-            for (o, s) in out[..frames * 2].chunks_exact_mut(2).zip(track_buf.chunks_exact(2)) {
-                o[0] += s[0] * t.gain_l;
-                o[1] += s[1] * t.gain_r;
+            let out = &mut out[..frames * 2];
+            match auto.filter(|(a, _)| a.has_gain()) {
+                Some((a, (p0, p1))) => {
+                    mn_core::mix::mix_ramp(out, track_buf, a.gains(p0, t.gain, t.pan), a.gains(p1, t.gain, t.pan))
+                }
+                None => mn_core::mix::mix_ramp(out, track_buf, (t.gain_l, t.gain_r), (t.gain_l, t.gain_r)),
             }
         }
         if !self.loop_on && !self.free_run && self.position >= length {
@@ -516,17 +543,34 @@ impl RtState {
         while let Ok(cmd) = self.commands.pop() {
             self.apply(cmd);
         }
+        let block_start = self.position;
+        // El transporte puede pararse a mitad de bloque (final de la canción): el
+        // máster procesa igualmente el bloque entero para no cortar su último tramo.
+        let playing = self.playing;
         self.render_music(n);
         // Bus máster: efectos, ganancia y medición (el metrónomo va después y no se mide).
+        let auto = self.master_automation.as_deref().filter(|_| playing);
         if let Some(chain) = self.master_chain.as_deref_mut() {
-            if self.playing {
+            if playing {
+                if let Some(a) = auto {
+                    a.apply_effects(chain, block_start);
+                }
                 chain.process(&mut self.scratch_out[..n * 2]);
             }
         }
-        for s in &mut self.scratch_out[..n * 2] {
-            *s *= self.master;
+        match auto {
+            Some(a) => {
+                // Igual que la mezcla offline: del inicio al final del bloque leído.
+                let (g0, g1) = (a.master_gain(block_start, self.master), a.master_gain(self.position, self.master));
+                mn_core::mix::ramp_in_place(&mut self.scratch_out[..n * 2], g0, g1);
+            }
+            None => {
+                for s in &mut self.scratch_out[..n * 2] {
+                    *s *= self.master;
+                }
+            }
         }
-        if self.playing {
+        if playing {
             self.meter.process(&self.scratch_out[..n * 2]);
         }
         self.render_clicks(n);

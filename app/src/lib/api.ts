@@ -51,6 +51,24 @@ export interface MasterReferenceResult {
 export interface MasterSettings {
   gain_db: number
   effects: EffectSlot[]
+  automation: AutomationLane[]
+}
+
+export type AutomationTarget =
+  | { kind: 'volume' }
+  | { kind: 'pan' }
+  | { kind: 'effect'; slot: string; param: string }
+
+export interface AutoPoint {
+  time: number
+  value: number
+}
+
+export interface AutomationLane {
+  id: string
+  target: AutomationTarget
+  enabled: boolean
+  points: AutoPoint[]
 }
 
 export interface TrackInfo {
@@ -66,6 +84,7 @@ export interface TrackInfo {
   /** Formato antiguo; al abrir el proyecto se convierte en un clip. */
   offset: number
   clips: Clip[]
+  automation: AutomationLane[]
 }
 
 /** Tramo del audio de una pista en la línea de tiempo (edición no destructiva). */
@@ -404,6 +423,8 @@ export const api = {
   recordCalibrate: () => invoke<LatencyReport>('record_calibrate'),
   trackRemove: (trackId: string) => invoke<void>('track_remove', { trackId }),
   clipsSet: (trackId: string, clips: Clip[]) => invoke<Clip[]>('clips_set', { trackId, clips }),
+  automationSet: (trackId: string | null, lanes: AutomationLane[]) =>
+    invoke<AutomationLane[]>('automation_set', { trackId, lanes }),
 }
 
 export const events = {

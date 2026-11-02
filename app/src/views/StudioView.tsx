@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ask } from '@tauri-apps/plugin-dialog'
 import {
   api,
   errorMessage,
   timelineEnd,
   type Analysis,
+  type AutomationLane,
   type Clip,
   type EffectSlot,
   type Lyrics,
@@ -27,6 +28,8 @@ import { formatTime } from '../lib/format'
 import { TRACK_KINDS } from '../lib/tracks'
 import { ClipLane } from '../components/ClipLane'
 import { snapGrid, snapTo, splitAt } from '../lib/clips'
+import { AutomationLaneView } from '../components/AutomationLaneView'
+import { automated, channelTargets, newLane, pruneLanes, retarget, targetKey } from '../lib/automation'
 import { AnalysisPanel } from '../components/AnalysisPanel'
 import { AnalysisLanes } from '../components/AnalysisLanes'
 import type { AnalysisJob } from '../lib/useAnalysis'
@@ -44,6 +47,8 @@ interface Props {
   recorder: Recorder
   onTrackRemoved: (trackId: string) => void
   onClipsChange: (trackId: string, clips: Clip[]) => void
+  /** `trackId = null`: automatización del máster. */
+  onAutomationChange: (trackId: string | null, lanes: AutomationLane[]) => void
   onTrackChange: (t: TrackInfo) => void
   onError: (msg: string) => void
   separation: {
@@ -80,8 +85,13 @@ const MAX_ZOOM = 64
 /** Separaciones posibles entre marcas de la regla (s). */
 const TICK_STEPS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
 
-/** Cambio de clips en una o varias pistas (una entrada del historial). */
-type Edit = { trackId: string; before: Clip[]; after: Clip[] }[]
+/** Una entrada del historial: cambios de clips o de automatización en uno o varios canales. */
+type Change =
+  | { kind: 'clips'; trackId: string; before: Clip[]; after: Clip[] }
+  | { kind: 'automation'; trackId: string | null; before: AutomationLane[]; after: AutomationLane[] }
+type Edit = Change[]
+/** Clave de canal para mostrar u ocultar su automatización. */
+const MASTER_KEY = 'master'
 
 export function StudioView({
   project,
@@ -89,6 +99,7 @@ export function StudioView({
   recorder,
   onTrackRemoved,
   onClipsChange,
+  onAutomationChange,
   onTrackChange,
   onError,
   separation,
@@ -134,10 +145,13 @@ export function StudioView({
     const t = project.tracks.find((x) => x.id === trackId)
     if (!t) return
     onTrackChange({ ...t, effects })
+    // Al quitar un efecto desaparecen sus curvas (el núcleo hace lo mismo).
+    const lanes = pruneLanes(t.automation, effects)
+    if (lanes.length !== t.automation.length) onAutomationChange(trackId, lanes)
     api.effectsSet(trackId, effects).catch((err) => onError(errorMessage(err)))
   }
   const setMasterEffects = (effects: EffectSlot[]) => {
-    onMasterChange({ ...master, effects })
+    onMasterChange({ ...master, effects, automation: pruneLanes(master.automation, effects) })
     api.effectsSet(null, effects).catch((err) => onError(errorMessage(err)))
   }
   const setMasterGain = (gain_db: number) => {
@@ -251,6 +265,24 @@ export function StudioView({
     },
     [onClipsChange, onError],
   )
+  const saveAutomation = useCallback(
+    (trackId: string | null, lanes: AutomationLane[]) => {
+      onAutomationChange(trackId, lanes)
+      api
+        .automationSet(trackId, lanes)
+        .then((saved) => onAutomationChange(trackId, saved))
+        .catch((err) => onError(errorMessage(err)))
+    },
+    [onAutomationChange, onError],
+  )
+  /** Aplica un lado (antes o después) de un cambio del historial. */
+  const applyChange = useCallback(
+    (c: Change, side: 'before' | 'after') => {
+      if (c.kind === 'clips') saveClips(c.trackId, c[side])
+      else saveAutomation(c.trackId, c[side])
+    },
+    [saveClips, saveAutomation],
+  )
   const commitEdit = useCallback(
     (edit: Edit) => {
       const changed = edit.filter((e) => JSON.stringify(e.before) !== JSON.stringify(e.after))
@@ -259,24 +291,134 @@ export function StudioView({
       if (undoStack.current.length > 200) undoStack.current.shift()
       redoStack.current = []
       syncHistory()
-      changed.forEach((e) => saveClips(e.trackId, e.after))
+      changed.forEach((e) => applyChange(e, 'after'))
     },
-    [saveClips],
+    [applyChange],
   )
   const undo = useCallback(() => {
     const e = undoStack.current.pop()
     if (!e) return
     redoStack.current.push(e)
     syncHistory()
-    e.forEach((c) => saveClips(c.trackId, c.before))
-  }, [saveClips])
+    e.forEach((c) => applyChange(c, 'before'))
+  }, [applyChange])
   const redo = useCallback(() => {
     const e = redoStack.current.pop()
     if (!e) return
     undoStack.current.push(e)
     syncHistory()
-    e.forEach((c) => saveClips(c.trackId, c.after))
-  }, [saveClips])
+    e.forEach((c) => applyChange(c, 'after'))
+  }, [applyChange])
+
+  // ---- Automatización ---------------------------------------------------------
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleExpanded = (key: string) =>
+    setExpanded((s) => {
+      const n = new Set(s)
+      if (n.has(key)) n.delete(key)
+      else n.add(key)
+      return n
+    })
+  /** Cambia los carriles de un canal y lo apunta en el historial. */
+  const commitLanes = (trackId: string | null, before: AutomationLane[], after: AutomationLane[]) =>
+    commitEdit([{ kind: 'automation', trackId, before, after }])
+
+  /** Carriles de automatización de un canal (pista o máster). */
+  const automationRows = (trackId: string | null, lanes: AutomationLane[], effects: EffectSlot[], color: string) => {
+    const targets = channelTargets(effects, trackId === null)
+    const used = new Set(lanes.map((l) => targetKey(l.target)))
+    return (
+      <>
+        {lanes.map((lane) => {
+          const info = targets.find((t) => t.key === targetKey(lane.target))
+          if (!info) return null
+          const replace = (next: AutomationLane) => lanes.map((l) => (l.id === lane.id ? next : l))
+          return (
+            <div key={lane.id} className="lane auto-lane">
+              <div className="lane-header auto-header">
+                <span className="lane-chip" style={{ background: color, opacity: 0.5 }} />
+                <select
+                  className="compact"
+                  value={info.key}
+                  disabled={recording}
+                  onChange={(e) => {
+                    const to = targets.find((t) => t.key === e.target.value)
+                    if (to) commitLanes(trackId, lanes, replace(retarget(lane, info, to)))
+                  }}
+                >
+                  {targets.map((t) => (
+                    <option key={t.key} value={t.key} disabled={t.key !== info.key && used.has(t.key)}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="lane-buttons">
+                  <label className="check small" title="Activar o desactivar esta curva">
+                    <input
+                      type="checkbox"
+                      checked={lane.enabled}
+                      disabled={recording}
+                      onChange={(e) => commitLanes(trackId, lanes, replace({ ...lane, enabled: e.target.checked }))}
+                    />
+                  </label>
+                  <button
+                    className="icon-btn small"
+                    title="Borrar todos los puntos"
+                    disabled={recording || lane.points.length === 0}
+                    onClick={() => commitLanes(trackId, lanes, replace({ ...lane, points: [] }))}
+                  >
+                    <Icon name="refresh" size={13} />
+                  </button>
+                  <button
+                    className="icon-btn small"
+                    title="Quitar el carril"
+                    disabled={recording}
+                    onClick={() => commitLanes(trackId, lanes, lanes.filter((l) => l.id !== lane.id))}
+                  >
+                    <Icon name="trash" size={13} />
+                  </button>
+                </div>
+              </div>
+              <AutomationLaneView
+                lane={lane}
+                info={info}
+                duration={duration}
+                color={color}
+                locked={recording}
+                snap={snap}
+                onPreview={(next) => onAutomationChange(trackId, replace(next))}
+                onCommit={(before, after) =>
+                  commitLanes(
+                    trackId,
+                    lanes.map((l) => (l.id === lane.id ? before : l)),
+                    lanes.map((l) => (l.id === lane.id ? after : l)),
+                  )
+                }
+              />
+            </div>
+          )
+        })}
+        <div className="lane auto-lane auto-add">
+          <div className="lane-header auto-header">
+            <span className="lane-chip" style={{ background: color, opacity: 0.5 }} />
+            <button
+              className="link small"
+              disabled={recording || used.size >= targets.length}
+              onClick={() => {
+                const lane = newLane(lanes, targets)
+                if (lane) commitLanes(trackId, lanes, [...lanes, lane])
+              }}
+            >
+              + Carril de automatización
+            </button>
+          </div>
+          <div className="auto-hint small muted">
+            Clic: añadir punto · arrastrar: mover (Mayús: solo el valor) · doble clic o clic derecho: borrar
+          </div>
+        </div>
+      </>
+    )
+  }
 
   /** Divide en el cabezal el clip seleccionado o, sin selección, todos los clips bajo el cabezal. */
   const splitAtPlayhead = useCallback(() => {
@@ -284,7 +426,7 @@ export function StudioView({
     for (const t of project.tracks) {
       if (selected && selected.trackId !== t.id) continue
       const after = splitAt(t.clips, position, selected?.clipId)
-      if (after) edit.push({ trackId: t.id, before: t.clips, after })
+      if (after) edit.push({ kind: 'clips', trackId: t.id, before: t.clips, after })
     }
     commitEdit(edit)
   }, [project.tracks, selected, position, commitEdit])
@@ -293,7 +435,7 @@ export function StudioView({
     if (!selected) return
     const t = project.tracks.find((x) => x.id === selected.trackId)
     if (!t) return
-    commitEdit([{ trackId: t.id, before: t.clips, after: t.clips.filter((c) => c.id !== selected.clipId) }])
+    commitEdit([{ kind: 'clips', trackId: t.id, before: t.clips, after: t.clips.filter((c) => c.id !== selected.clipId) }])
     setSelected(null)
   }, [project.tracks, selected, commitEdit, setSelected])
 
@@ -629,8 +771,11 @@ export function StudioView({
         {project.tracks.map((t) => {
           const kind = TRACK_KINDS[t.kind]
           const audible = !t.mute && (!anySolo || t.solo)
+          const volAuto = automated(t.automation, 'volume')
+          const panAuto = automated(t.automation, 'pan')
           return (
-            <div key={t.id} className="lane">
+            <Fragment key={t.id}>
+            <div className="lane">
               <div className="lane-header">
                 <span className="lane-chip" style={{ background: kind.color }} />
                 <div className="lane-title">
@@ -659,6 +804,13 @@ export function StudioView({
                   >
                     FX
                   </button>
+                  <button
+                    className={`toggle auto ${expanded.has(t.id) ? 'open' : ''} ${t.automation.some((l) => l.enabled && l.points.length) ? 'on' : ''}`}
+                    title={`Automatización${t.automation.length ? `: ${t.automation.length} ${t.automation.length === 1 ? 'curva' : 'curvas'}` : ''}`}
+                    onClick={() => toggleExpanded(t.id)}
+                  >
+                    A
+                  </button>
                   {t.kind === 'recording' && (
                     <button
                       className="icon-btn lane-remove"
@@ -670,9 +822,13 @@ export function StudioView({
                     </button>
                   )}
                 </div>
-                <label className="lane-slider" title={`Volumen: ${t.gain_db.toFixed(1)} dB (doble clic: 0 dB)`}>
+                <label
+                  className={`lane-slider ${volAuto ? 'automated' : ''}`}
+                  title={volAuto ? 'Volumen controlado por la automatización' : `Volumen: ${t.gain_db.toFixed(1)} dB (doble clic: 0 dB)`}
+                >
                   <span className="small muted">Vol</span>
                   <input
+                    disabled={volAuto}
                     type="range"
                     min={-60}
                     max={12}
@@ -683,9 +839,13 @@ export function StudioView({
                   />
                   <span className="small mono">{t.gain_db <= -60 ? '-∞' : t.gain_db.toFixed(1)}</span>
                 </label>
-                <label className="lane-slider" title="Panorama (doble clic: centro)">
+                <label
+                  className={`lane-slider ${panAuto ? 'automated' : ''}`}
+                  title={panAuto ? 'Panorama controlado por la automatización' : 'Panorama (doble clic: centro)'}
+                >
                   <span className="small muted">Pan</span>
                   <input
+                    disabled={panAuto}
                     type="range"
                     min={-1}
                     max={1}
@@ -716,12 +876,29 @@ export function StudioView({
                 }}
                 onCommit={(before, after) => {
                   setFrozenDuration(null)
-                  commitEdit([{ trackId: t.id, before, after }])
+                  commitEdit([{ kind: 'clips', trackId: t.id, before, after }])
                 }}
               />
             </div>
+            {expanded.has(t.id) && automationRows(t.id, t.automation, t.effects, kind.color)}
+            </Fragment>
           )
         })}
+
+        <div className="lane master-lane">
+          <div className="lane-header compact-header">
+            <strong>Máster</strong>
+            <button
+              className={`toggle auto ${expanded.has(MASTER_KEY) ? 'open' : ''} ${master.automation.some((l) => l.enabled && l.points.length) ? 'on' : ''}`}
+              title="Automatización del máster (volumen y efectos del bus)"
+              onClick={() => toggleExpanded(MASTER_KEY)}
+            >
+              A
+            </button>
+          </div>
+          <div className="lane-wave" onPointerDown={(e) => seek((e.nativeEvent.offsetX / e.currentTarget.clientWidth) * duration)} />
+        </div>
+        {expanded.has(MASTER_KEY) && automationRows(null, master.automation, master.effects, '#e8eaf1')}
 
         <div className="playhead-layer">
           {loopView && (

@@ -7,6 +7,7 @@ import {
   timelineEnd,
   type Analysis,
   type AppInfo,
+  type AutomationLane,
   type Clip,
   type Lyrics,
   type MasterReferenceResult,
@@ -290,6 +291,15 @@ export default function App() {
     setProject((p) => p && { ...p, tracks: p.tracks.map(withClips), project: { ...p.project, tracks: p.project.tracks.map(withClips) } })
   }, [])
 
+  const onAutomationChange = useCallback((id: string | null, automation: AutomationLane[]) => {
+    setProject((p) => {
+      if (!p) return p
+      if (id === null) return { ...p, project: { ...p.project, master: { ...p.project.master, automation } } }
+      const withLanes = <T extends { id: string; automation: AutomationLane[] }>(t: T): T => (t.id === id ? { ...t, automation } : t)
+      return { ...p, tracks: p.tracks.map(withLanes), project: { ...p.project, tracks: p.project.tracks.map(withLanes) } }
+    })
+  }, [])
+
   const onTrackChange = useCallback((t: TrackInfo) => {
     setProject((p) => p && { ...p, tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, ...t } : x)) })
   }, [])
@@ -377,6 +387,7 @@ export default function App() {
             recorder={recorder}
             onTrackRemoved={onTrackRemoved}
             onClipsChange={onClipsChange}
+            onAutomationChange={onAutomationChange}
             onTrackChange={onTrackChange}
             onError={showError}
             separation={separation}

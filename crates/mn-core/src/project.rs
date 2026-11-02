@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use mn_fx::EffectSlot;
 use uuid::Uuid;
 
+use crate::automation::AutomationLane;
 use crate::mix::ClipFrames;
 use crate::{CoreError, Result};
 
@@ -58,6 +59,9 @@ pub struct TrackInfo {
     /// Tramos del audio colocados en la línea de tiempo (edición no destructiva).
     #[serde(default)]
     pub clips: Vec<Clip>,
+    /// Curvas de volumen, panorama y parámetros de efectos.
+    #[serde(default)]
+    pub automation: Vec<AutomationLane>,
 }
 
 /// Duración mínima de un clip (s).
@@ -165,6 +169,7 @@ impl TrackInfo {
             effects: Vec::new(),
             offset: 0.0,
             clips: Vec::new(),
+            automation: Vec::new(),
         }
     }
 
@@ -193,6 +198,8 @@ impl TrackInfo {
 pub struct MasterSettings {
     pub gain_db: f32,
     pub effects: Vec<EffectSlot>,
+    /// Curvas de volumen del máster y de parámetros de sus efectos.
+    pub automation: Vec<AutomationLane>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

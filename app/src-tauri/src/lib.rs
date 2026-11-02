@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mn_core::analysis::Analysis;
+use mn_core::automation::{sanitize_lanes, AutomationLane, ChannelAutomation};
 use mn_core::audio::{self, AudioBuffer};
 use mn_core::export::{export_audio, ExportFormat};
 use mn_core::ffmpeg;
@@ -199,6 +200,9 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
     });
     engine.set_effects(None, &project.master.effects).map_err(err)?;
     engine.set_master_gain_db(project.master.gain_db).map_err(err)?;
+    engine
+        .set_automation(None, ChannelAutomation::build(&project.master.automation, &project.master.effects, rate))
+        .map_err(err)?;
     let length = timeline_length(&project, &buffers, rate);
     apply_practice(engine, &project.practice, None, analysis.as_ref(), length)?;
 
@@ -231,7 +235,24 @@ fn add_to_engine(engine: &Engine, info: &TrackInfo, data: Arc<Vec<f32>>, rate: u
     if !info.effects.is_empty() {
         engine.set_effects(Some(id), &info.effects).map_err(err)?;
     }
+    if !info.automation.is_empty() {
+        engine.set_automation(Some(id), ChannelAutomation::build(&info.automation, &info.effects, rate)).map_err(err)?;
+    }
     Ok(id)
+}
+
+/// Efectos y automatización de una pista o, con `None`, del máster.
+fn channel_mut(
+    project: &mut Project,
+    track: Option<Uuid>,
+) -> Result<(&mut Vec<EffectSlot>, &mut Vec<AutomationLane>), String> {
+    match track {
+        Some(id) => {
+            let t = project.tracks.iter_mut().find(|t| t.id == id).ok_or("pista desconocida")?;
+            Ok((&mut t.effects, &mut t.automation))
+        }
+        None => Ok((&mut project.master.effects, &mut project.master.automation)),
+    }
 }
 
 /// Duración de la línea de tiempo en frames del motor (pistas con su desfase).
@@ -786,6 +807,15 @@ fn clip_sets(project: &Project, buffers: &HashMap<Uuid, Arc<Vec<f32>>>, rate: u3
         .collect()
 }
 
+/// Automatización de cada pista (las que tienen alguna curva activa).
+fn automations(project: &Project, rate: u32) -> HashMap<Uuid, ChannelAutomation> {
+    project
+        .tracks
+        .iter()
+        .filter_map(|t| ChannelAutomation::build(&t.automation, &t.effects, rate).map(|a| (t.id, a)))
+        .collect()
+}
+
 /// Carpeta (relativa al proyecto) de los masters generados.
 const MASTER_DIR: &str = "audio/master/";
 
@@ -800,6 +830,7 @@ fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, 
         (d, p, s.buffers.clone(), s.native_rate)
     };
     let clip_sets = clip_sets(&project, &buffers, rate);
+    let autos = automations(&project, rate);
     let inputs: Vec<MixInput> = project
         .tracks
         .iter()
@@ -813,13 +844,14 @@ fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, 
                 mute: t.mute,
                 solo: t.solo,
                 effects: &t.effects,
+                automation: autos.get(&t.id),
             })
         })
         .collect();
     if inputs.is_empty() {
         return Err("no hay pistas que masterizar".into());
     }
-    let mixed = mixdown(&inputs, &MasterSettings::default(), rate);
+    let mixed = mixdown(&inputs, &MasterSettings::default(), None, rate);
     Ok((mixed, project, dir, native_rate))
 }
 
@@ -859,12 +891,17 @@ async fn master_auto(app: AppHandle, target_lufs: f64, ceiling_db: f32) -> Resul
         if !r.before.integrated.is_finite() {
             return Err("la mezcla está en silencio".into());
         }
+        let effects = with_auto_limiter(&project.master.effects, r.limiter_input_db, ceiling);
         let master = MasterSettings {
             gain_db: r.master_gain_db,
-            effects: with_auto_limiter(&project.master.effects, r.limiter_input_db, ceiling),
+            automation: sanitize_lanes(project.master.automation.clone(), &effects),
+            effects,
         };
         engine.set_effects(None, &master.effects).map_err(err)?;
         engine.set_master_gain_db(master.gain_db).map_err(err)?;
+        engine
+            .set_automation(None, ChannelAutomation::build(&master.automation, &master.effects, engine.sample_rate()))
+            .map_err(err)?;
         let mut s = state.session.lock().unwrap();
         if let Some(p) = s.project.as_mut() {
             p.master = master.clone();
@@ -953,10 +990,7 @@ fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<
         None => None,
     };
     let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
-    let current = match track_id {
-        Some(id) => &mut project.tracks.iter_mut().find(|t| t.id == id).ok_or("pista desconocida")?.effects,
-        None => &mut project.master.effects,
-    };
+    let (current, lanes) = channel_mut(project, track_id)?;
     let same_layout = current.len() == effects.len()
         && current.iter().zip(&effects).all(|(a, b)| a.id == b.id && a.params.kind() == b.params.kind());
     if same_layout {
@@ -972,10 +1006,37 @@ fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<
         engine.set_effects(engine_id, &effects).map_err(err)?;
     }
     *current = effects.clone();
+    if !lanes.is_empty() {
+        // Se quitan las curvas de efectos eliminados y se reconstruye con los parámetros nuevos.
+        *lanes = sanitize_lanes(std::mem::take(lanes), &effects);
+        engine.set_automation(engine_id, ChannelAutomation::build(lanes, &effects, engine.sample_rate())).map_err(err)?;
+    }
     if let Some(dir) = s.dir.clone() {
         project.save(&dir).map_err(err)?;
     }
     Ok(effects)
+}
+
+/// Sustituye los carriles de automatización de una pista (o del máster con
+/// `track_id = null`). Se sanean contra su cadena de efectos.
+#[tauri::command]
+fn automation_set(state: State<'_, AppState>, track_id: Option<Uuid>, lanes: Vec<AutomationLane>) -> Result<Vec<AutomationLane>, String> {
+    let engine = state.engine()?;
+    let mut guard = state.session.lock().unwrap();
+    let s = &mut *guard;
+    let engine_id = match track_id {
+        Some(id) => Some(*s.engine_ids.get(&id).ok_or("pista desconocida")?),
+        None => None,
+    };
+    let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
+    let (effects, current) = channel_mut(project, track_id)?;
+    let lanes = sanitize_lanes(lanes, effects);
+    engine.set_automation(engine_id, ChannelAutomation::build(&lanes, effects, engine.sample_rate())).map_err(err)?;
+    *current = lanes.clone();
+    if let Some(dir) = s.dir.clone() {
+        project.save(&dir).map_err(err)?;
+    }
+    Ok(lanes)
 }
 
 /// Ganancia del bus máster en dB.
@@ -1006,6 +1067,7 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
             (p, s.buffers.clone(), s.native_rate)
         };
         let clip_sets = clip_sets(&project, &buffers, rate);
+        let autos = automations(&project, rate);
         let inputs: Vec<MixInput> = project
             .tracks
             .iter()
@@ -1020,10 +1082,12 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
                         mute: t.mute,
                         solo: t.solo,
                         effects: &t.effects,
+                        automation: autos.get(&t.id),
                     })
             })
             .collect();
-        let mixed = audio::resample(&mixdown(&inputs, &project.master, rate), native_rate).map_err(err)?;
+        let master_auto = ChannelAutomation::build(&project.master.automation, &project.master.effects, rate);
+        let mixed = audio::resample(&mixdown(&inputs, &project.master, master_auto.as_ref(), rate), native_rate).map_err(err)?;
         let report = loudness::measure(&mixed.data, mixed.sample_rate);
         let path = Path::new(&path).with_extension(format.extension()).display().to_string();
         export_audio(Path::new(&path), &mixed, format).map_err(err)?;
@@ -1360,6 +1424,7 @@ pub fn run() {
             record_calibrate,
             track_remove,
             clips_set,
+            automation_set,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");

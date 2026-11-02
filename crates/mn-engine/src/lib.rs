@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
+use mn_core::automation::ChannelAutomation;
 use mn_core::mix::{clips_end, ClipFrames};
 use mn_fx::{Chain, EffectParams, EffectSlot};
 use input::{InputHandle, Monitor};
@@ -67,6 +68,7 @@ pub(crate) struct EngineTrack {
     gain_l: f32,
     gain_r: f32,
     chain: Option<Box<Chain>>,
+    automation: Option<Box<ChannelAutomation>>,
 }
 
 impl EngineTrack {
@@ -108,6 +110,7 @@ pub(crate) enum Garbage {
     Chain(Box<Chain>),
     Monitor(Box<Monitor>),
     Clips(Vec<ClipFrames>),
+    Automation(Box<ChannelAutomation>),
 }
 
 pub(crate) enum Command {
@@ -136,6 +139,8 @@ pub(crate) enum Command {
     SetEffectEnabled(Option<TrackId>, usize, bool),
     /// Sustituye los clips de una pista.
     SetClips(TrackId, Box<Vec<ClipFrames>>),
+    /// Sustituye la automatización de una pista (`None` = bus máster).
+    SetAutomation(Option<TrackId>, Option<Box<ChannelAutomation>>),
     /// Grabando: el transporte sigue más allá del final de las pistas.
     SetFreeRun(bool),
     AttachMonitor(Box<Monitor>),
@@ -330,6 +335,7 @@ impl Engine {
             gain_l: 1.0,
             gain_r: 1.0,
             chain: None,
+            automation: None,
         });
         t.update_gains();
         self.send(Command::AddTrack(t))?;
@@ -337,6 +343,12 @@ impl Engine {
     }
 
     /// Sustituye los clips de una pista sin cortar la reproducción.
+    /// Sustituye la automatización de una pista o, con `None`, la del máster.
+    /// Debe construirse a la frecuencia del motor y con la cadena actual.
+    pub fn set_automation(&self, track: Option<TrackId>, automation: Option<ChannelAutomation>) -> Result<(), EngineError> {
+        self.send(Command::SetAutomation(track, automation.map(Box::new)))
+    }
+
     pub fn set_clips(&self, id: TrackId, clips: Vec<ClipFrames>) -> Result<(), EngineError> {
         self.send(Command::SetClips(id, Box::new(clips)))
     }
@@ -723,6 +735,7 @@ mod tests {
             gain_l: 1.0,
             gain_r: 1.0,
             chain: None,
+            automation: None,
         });
         t.update_gains();
         t
@@ -838,6 +851,98 @@ mod tests {
         tx.push(Command::SetFreeRun(false)).ok();
         rt.render(&mut out, 2);
         assert!(!rt.playing);
+    }
+
+    fn volume_lane(points: &[(f64, f32)]) -> Vec<mn_core::automation::AutomationLane> {
+        use mn_core::automation::{AutoPoint, AutomationLane, AutomationTarget};
+        vec![AutomationLane {
+            id: Default::default(),
+            target: AutomationTarget::Volume,
+            enabled: true,
+            points: points.iter().map(|&(time, value)| AutoPoint { time, value }).collect(),
+        }]
+    }
+
+    #[test]
+    fn track_and_master_automation() {
+        let (mut rt, mut tx) = rt_with(vec![track(1, 0.5, RATE as usize * 4)]);
+        // Pista: silencio (-60 dB) hasta 0,5 s y 0 dB desde 1 s.
+        let a = ChannelAutomation::build(&volume_lane(&[(0.5, -60.0), (1.0, 0.0)]), &[], RATE).unwrap();
+        tx.push(Command::SetAutomation(Some(1), Some(Box::new(a)))).ok();
+        tx.push(Command::Play).ok();
+        let mut out = vec![0.0f32; 2 * RATE as usize / 4];
+        rt.render(&mut out, 2); // 0..0,25 s
+        assert!(out.iter().all(|&s| s == 0.0), "silencio automatizado");
+        for _ in 0..4 {
+            rt.render(&mut out, 2); // hasta 1,25 s
+        }
+        assert!(out.iter().all(|&s| (s - 0.5).abs() < 1e-6), "0 dB al final");
+
+        // Máster a -6 dB por automatización; quitarla devuelve el fader (0 dB).
+        let m = ChannelAutomation::build(&volume_lane(&[(0.0, -6.0)]), &[], RATE).unwrap();
+        tx.push(Command::SetAutomation(None, Some(Box::new(m)))).ok();
+        rt.render(&mut out, 2);
+        rt.render(&mut out, 2);
+        assert!(out.iter().all(|&s| (s - 0.5 * 0.501_187).abs() < 1e-4));
+        tx.push(Command::SetAutomation(None, None)).ok();
+        tx.push(Command::SetAutomation(Some(1), None)).ok();
+        rt.render(&mut out, 2);
+        rt.render(&mut out, 2);
+        assert!(out.iter().all(|&s| (s - 0.5).abs() < 1e-6));
+    }
+
+    /// Lo que suena en el motor y lo que se exporta deben coincidir también
+    /// con automatización (volumen, panorama, parámetros de efectos y máster).
+    #[test]
+    fn realtime_matches_offline_mixdown_with_automation() {
+        use mn_core::automation::{AutoPoint, AutomationLane, AutomationTarget};
+        use mn_core::mix::{mixdown, MixInput};
+        use mn_core::project::MasterSettings;
+        let lane = |target, pts: &[(f64, f32)]| AutomationLane {
+            id: uuid_like(),
+            target,
+            enabled: true,
+            points: pts.iter().map(|&(time, value)| AutoPoint { time, value }).collect(),
+        };
+        let fx = vec![EffectSlot { id: "rv".into(), enabled: true, params: EffectParams::Reverb(mn_fx::ReverbParams::default()) }];
+        let master_fx = vec![EffectSlot { id: "eq".into(), enabled: true, params: EffectParams::Eq(mn_fx::EqParams::default()) }];
+        let lanes = vec![
+            lane(AutomationTarget::Volume, &[(0.1, -20.0), (0.6, 3.0)]),
+            lane(AutomationTarget::Pan, &[(0.0, -1.0), (0.8, 0.7)]),
+            lane(AutomationTarget::Effect { slot: "rv".into(), param: "mix".into() }, &[(0.0, 0.0), (0.5, 0.8)]),
+        ];
+        let master_lanes = vec![
+            lane(AutomationTarget::Volume, &[(0.2, 0.0), (0.7, -9.0)]),
+            lane(AutomationTarget::Effect { slot: "eq".into(), param: "mid1.gain_db".into() }, &[(0.0, -12.0), (0.9, 12.0)]),
+        ];
+        let frames = RATE as usize;
+        let t = sine_track(1, 330.0, frames);
+        let data = t.data.clone();
+        let (mut rt, mut tx) = rt_with(vec![t]);
+        tx.push(Command::SetChain(Some(1), Box::new(Chain::new(&fx, RATE)))).ok();
+        tx.push(Command::SetChain(None, Box::new(Chain::new(&master_fx, RATE)))).ok();
+        tx.push(Command::SetAutomation(Some(1), ChannelAutomation::build(&lanes, &fx, RATE).map(Box::new))).ok();
+        tx.push(Command::SetAutomation(None, ChannelAutomation::build(&master_lanes, &master_fx, RATE).map(Box::new))).ok();
+        tx.push(Command::Play).ok();
+        let mut live = vec![0.0f32; frames * 2];
+        for chunk in live.chunks_mut(512 * 2 * 3) {
+            rt.render(chunk, 2);
+        }
+
+        let clips = vec![ClipFrames::whole(0, frames as u64)];
+        let auto = ChannelAutomation::build(&lanes, &fx, RATE).unwrap();
+        let input = MixInput { data: &data, clips: &clips, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &fx, automation: Some(&auto) };
+        let master = MasterSettings { gain_db: 0.0, effects: master_fx.clone(), automation: master_lanes.clone() };
+        let master_auto = ChannelAutomation::build(&master_lanes, &master_fx, RATE).unwrap();
+        let offline = mixdown(&[input], &master, Some(&master_auto), RATE);
+        let max_diff = live.iter().zip(&offline.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        let peak = offline.data.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.1, "hay señal: {peak}");
+        assert!(max_diff < 1e-5, "diferencia máxima {max_diff}");
+    }
+
+    fn uuid_like() -> uuid::Uuid {
+        uuid::Uuid::new_v4()
     }
 
     #[test]

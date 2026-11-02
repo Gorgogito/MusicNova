@@ -2,6 +2,7 @@
 //! formato de proyecto. No depende de la interfaz ni del dispositivo de audio.
 
 pub mod analysis;
+pub mod automation;
 pub mod audio;
 pub mod export;
 pub mod ffmpeg;
