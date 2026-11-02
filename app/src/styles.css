@@ -312,13 +312,26 @@ nav {
 }
 
 /* ---------- Estudio ---------- */
-.lanes {
-  position: relative;
+.lanes-scroll {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elev);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.lanes {
+  position: relative;
   user-select: none;
+}
+/* Con zoom, las cabeceras de las pistas se quedan fijas a la izquierda. */
+.ruler-spacer,
+.lane-header {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+.ruler-spacer {
+  background: var(--bg-elev-2);
 }
 .ruler {
   display: grid;
@@ -1492,4 +1505,81 @@ input.num.wide {
   background: var(--bg-elev-2);
   color: var(--text);
   font: inherit;
+}
+
+/* ---------- Edición de clips ---------- */
+.edit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+}
+.edit-bar .check {
+  margin-left: 6px;
+}
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.zoom input[type='range'] {
+  width: 140px;
+}
+.icon-btn.small {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+}
+.clip {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  min-width: 2px;
+  border: 1px solid color-mix(in srgb, var(--clip-color) 55%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--clip-color) 12%, transparent);
+  overflow: hidden;
+  cursor: grab;
+}
+.clip.dimmed {
+  opacity: 0.35;
+}
+.clip.selected {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #fff inset;
+}
+.clip .waveform {
+  pointer-events: none;
+}
+.clip-fades {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.clip-fades path {
+  fill: rgba(0, 0, 0, 0.45);
+  stroke: color-mix(in srgb, var(--clip-color) 80%, white);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.fade-handle {
+  position: absolute;
+  top: 1px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border: 1px solid #fff;
+  border-radius: 2px;
+  background: var(--clip-color);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+.clip:hover .fade-handle,
+.clip.selected .fade-handle {
+  opacity: 1;
 }

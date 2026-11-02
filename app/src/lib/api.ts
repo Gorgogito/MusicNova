@@ -63,8 +63,22 @@ export interface TrackInfo {
   mute: boolean
   solo: boolean
   effects: EffectSlot[]
-  /** Segundo de la línea de tiempo en el que empieza la pista. */
+  /** Formato antiguo; al abrir el proyecto se convierte en un clip. */
   offset: number
+  clips: Clip[]
+}
+
+/** Tramo del audio de una pista en la línea de tiempo (edición no destructiva). */
+export interface Clip {
+  id: string
+  /** Segundo de la línea de tiempo en el que empieza. */
+  start: number
+  /** Segundo del archivo de la pista en el que empieza. */
+  source_start: number
+  length: number
+  fade_in: number
+  fade_out: number
+  gain_db: number
 }
 
 export interface Peaks {
@@ -389,6 +403,7 @@ export const api = {
   recordStop: () => invoke<void>('record_stop'),
   recordCalibrate: () => invoke<LatencyReport>('record_calibrate'),
   trackRemove: (trackId: string) => invoke<void>('track_remove', { trackId }),
+  clipsSet: (trackId: string, clips: Clip[]) => invoke<Clip[]>('clips_set', { trackId, clips }),
 }
 
 export const events = {
@@ -402,9 +417,12 @@ export const events = {
     listen<RecordFinished>('record-finished', (e) => cb(e.payload)),
 }
 
-/** Final de la línea de tiempo: la pista que acaba más tarde (con su desfase). */
-export function timelineEnd(tracks: { offset: number; duration: number }[]): number {
-  return Math.max(0, ...tracks.map((t) => (t.offset ?? 0) + t.duration))
+/** Final de la línea de tiempo: el clip que acaba más tarde. */
+export function timelineEnd(tracks: { clips: Clip[]; offset: number; duration: number }[]): number {
+  return Math.max(
+    0,
+    ...tracks.map((t) => (t.clips?.length ? Math.max(...t.clips.map((c) => c.start + c.length)) : (t.offset ?? 0) + t.duration)),
+  )
 }
 
 export function errorMessage(e: unknown): string {

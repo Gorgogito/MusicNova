@@ -13,11 +13,11 @@ use mn_core::audio::{self, AudioBuffer};
 use mn_core::export::{export_audio, ExportFormat};
 use mn_core::ffmpeg;
 use mn_core::lyrics::{Lyrics, LyricsFormat};
-use mn_core::mix::{mixdown, MixInput};
+use mn_core::mix::{mixdown, render_track, ClipFrames, MixInput};
 use mn_core::peaks::{compute_peaks, Peaks};
 use mn_core::master::{auto_master, with_auto_limiter};
 use mn_core::project::{
-    sanitize_dir_name, BeatSource, MasterSettings, PracticeSettings, Project, TrackInfo, TrackKind, PROJECT_FILE,
+    clip_frames, sanitize_clips, sanitize_dir_name, BeatSource, Clip, MasterSettings, PracticeSettings, Project, TrackInfo, TrackKind, PROJECT_FILE,
 };
 use mn_engine::{Engine, InputChannels, InputDeviceInfo, InputInfo, LatencyReport, TrackId};
 use mn_fx::{loudness, EffectSlot};
@@ -158,10 +158,18 @@ fn prepare_tracks(dir: &Path, project: &Project, rate: u32) -> Result<Vec<(Audio
 }
 
 /// Carga un proyecto en el motor y devuelve su vista para la interfaz.
-fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<ProjectView, String> {
+fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Result<ProjectView, String> {
     let engine = state.engine()?;
     let rate = engine.sample_rate();
     let prepared = prepare_tracks(&dir, &project, rate)?;
+    // Proyectos anteriores a los clips (o clips que no encajan con el audio).
+    let mut normalized = false;
+    for (info, (buf, _, _)) in project.tracks.iter_mut().zip(&prepared) {
+        normalized |= info.normalize_clips(buf.duration_secs());
+    }
+    if normalized {
+        project.save(&dir).map_err(err)?;
+    }
 
     engine.clear().map_err(err)?;
     let mut ids = HashMap::new();
@@ -214,7 +222,8 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
 
 /// Añade una pista al motor con su desfase, volumen, panorama y efectos.
 fn add_to_engine(engine: &Engine, info: &TrackInfo, data: Arc<Vec<f32>>, rate: u32) -> Result<TrackId, String> {
-    let id = engine.add_track_at(data, rate, info.offset_frames(rate)).map_err(err)?;
+    let clips = clip_frames(&info.clips, rate, (data.len() / 2) as u64);
+    let id = engine.add_track_with_clips(data, rate, clips).map_err(err)?;
     engine.set_gain_db(id, info.gain_db).map_err(err)?;
     engine.set_pan(id, info.pan).map_err(err)?;
     engine.set_mute(id, info.mute).map_err(err)?;
@@ -230,7 +239,7 @@ fn timeline_length(project: &Project, buffers: &HashMap<Uuid, Arc<Vec<f32>>>, ra
     project
         .tracks
         .iter()
-        .filter_map(|t| buffers.get(&t.id).map(|b| t.offset_frames(rate) + (b.len() / 2) as u64))
+        .filter_map(|t| buffers.get(&t.id).map(|b| mn_core::mix::clips_end(&clip_frames(&t.clips, rate, (b.len() / 2) as u64))))
         .max()
         .unwrap_or(0)
 }
@@ -768,6 +777,15 @@ struct MixExport {
     lra: f64,
 }
 
+/// Clips en frames de cada pista cargada.
+fn clip_sets(project: &Project, buffers: &HashMap<Uuid, Arc<Vec<f32>>>, rate: u32) -> HashMap<Uuid, Vec<ClipFrames>> {
+    project
+        .tracks
+        .iter()
+        .filter_map(|t| buffers.get(&t.id).map(|d| (t.id, clip_frames(&t.clips, rate, (d.len() / 2) as u64))))
+        .collect()
+}
+
 /// Carpeta (relativa al proyecto) de los masters generados.
 const MASTER_DIR: &str = "audio/master/";
 
@@ -781,6 +799,7 @@ fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, 
         let d = s.dir.clone().ok_or("no hay ningún proyecto abierto")?;
         (d, p, s.buffers.clone(), s.native_rate)
     };
+    let clip_sets = clip_sets(&project, &buffers, rate);
     let inputs: Vec<MixInput> = project
         .tracks
         .iter()
@@ -788,7 +807,7 @@ fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, 
         .filter_map(|t| {
             buffers.get(&t.id).map(|d| MixInput {
                 data: d,
-                offset: t.offset_frames(rate) as usize,
+                clips: &clip_sets[&t.id],
                 gain_db: t.gain_db,
                 pan: t.pan,
                 mute: t.mute,
@@ -986,6 +1005,7 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
             let p = s.project.clone().ok_or("no hay ningún proyecto abierto")?;
             (p, s.buffers.clone(), s.native_rate)
         };
+        let clip_sets = clip_sets(&project, &buffers, rate);
         let inputs: Vec<MixInput> = project
             .tracks
             .iter()
@@ -994,7 +1014,7 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
                     .get(&t.id)
                     .map(|d| MixInput {
                         data: d,
-                        offset: t.offset_frames(rate) as usize,
+                        clips: &clip_sets[&t.id],
                         gain_db: t.gain_db,
                         pan: t.pan,
                         mute: t.mute,
@@ -1041,14 +1061,12 @@ async fn export_stems(app: AppHandle, dir: String, format: ExportFormat) -> Resu
                         sanitize_dir_name(&t.name),
                         format.extension()
                     ));
-                    let offset = t.offset;
+                    let clips = t.clips.clone();
                     s.spawn(move || {
-                        let mut buf = audio::decode_file(&src).map_err(err)?;
-                        // Las tomas grabadas a mitad de canción se alinean con silencio delante.
-                        let pad = (offset.max(0.0) * buf.sample_rate as f64).round() as usize * 2;
-                        if pad > 0 {
-                            buf.data.splice(0..0, std::iter::repeat_n(0.0, pad));
-                        }
+                        let decoded = audio::decode_file(&src).map_err(err)?;
+                        // La pista tal como queda editada (clips, fundidos, huecos), alineada desde 0.
+                        let frames = clip_frames(&clips, decoded.sample_rate, decoded.frames() as u64);
+                        let buf = AudioBuffer { sample_rate: decoded.sample_rate, data: render_track(&decoded.data, &frames) };
                         export_audio(&dest, &buf, format).map_err(err)?;
                         Ok(dest.display().to_string())
                     })
@@ -1166,7 +1184,7 @@ fn add_take(state: &AppState, take: mn_engine::Take) -> Result<RecordFinished, S
     let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
     let n = project.tracks.iter().filter(|t| t.kind == TrackKind::Recording).count() + 1;
     let mut info = TrackInfo::new(format!("Toma {n}"), TrackKind::Recording, rel);
-    info.offset = take.offset_secs;
+    info.clips = vec![Clip::whole(take.offset_secs, duration)];
     let data = Arc::new(buf.data);
     let id = add_to_engine(engine, &info, data.clone(), rate)?;
     project.tracks.push(info.clone());
@@ -1180,6 +1198,27 @@ fn add_take(state: &AppState, take: mn_engine::Take) -> Result<RecordFinished, S
         )
     });
     Ok(RecordFinished { track: Some(TrackView { info, duration, peaks }), message })
+}
+
+/// Sustituye los clips de una pista (mover, recortar, dividir, fundidos...).
+/// Se sanean contra la duración del audio y se aplican sin cortar el sonido.
+#[tauri::command]
+fn clips_set(state: State<'_, AppState>, track_id: Uuid, clips: Vec<Clip>) -> Result<Vec<Clip>, String> {
+    let engine = state.engine()?;
+    let rate = engine.sample_rate();
+    let mut guard = state.session.lock().unwrap();
+    let s = &mut *guard;
+    let id = *s.engine_ids.get(&track_id).ok_or("pista desconocida")?;
+    let frames = (s.buffers.get(&track_id).ok_or("pista desconocida")?.len() / 2) as u64;
+    let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
+    let t = project.tracks.iter_mut().find(|t| t.id == track_id).ok_or("pista desconocida")?;
+    let clips = sanitize_clips(clips, frames as f64 / rate as f64);
+    engine.set_clips(id, clip_frames(&clips, rate, frames)).map_err(err)?;
+    t.clips = clips.clone();
+    if let Some(dir) = s.dir.clone() {
+        project.save(&dir).map_err(err)?;
+    }
+    Ok(clips)
 }
 
 /// Mide la latencia de ida y vuelta de la entrada y la salida actuales.
@@ -1320,6 +1359,7 @@ pub fn run() {
             record_stop,
             record_calibrate,
             track_remove,
+            clips_set,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");

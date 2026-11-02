@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
+use mn_core::mix::{clips_end, ClipFrames};
 use mn_fx::{Chain, EffectParams, EffectSlot};
 use input::{InputHandle, Monitor};
 use rt::RtState;
@@ -55,9 +56,10 @@ pub enum EngineError {
 pub(crate) struct EngineTrack {
     id: TrackId,
     data: Arc<Vec<f32>>,
-    /// Frame de la línea de tiempo en el que empieza la pista.
-    offset: u64,
-    frames: u64,
+    /// Tramos del audio colocados en la línea de tiempo.
+    clips: Vec<ClipFrames>,
+    /// Final del último clip (frames).
+    end: u64,
     gain: f32,
     pan: f32,
     mute: bool,
@@ -69,7 +71,7 @@ pub(crate) struct EngineTrack {
 
 impl EngineTrack {
     fn end(&self) -> u64 {
-        self.offset + self.frames
+        self.end
     }
 
     fn update_gains(&mut self) {
@@ -105,6 +107,7 @@ pub(crate) enum Garbage {
     Beats(Box<BeatGrid>),
     Chain(Box<Chain>),
     Monitor(Box<Monitor>),
+    Clips(Vec<ClipFrames>),
 }
 
 pub(crate) enum Command {
@@ -131,6 +134,8 @@ pub(crate) enum Command {
     /// Cambia los parámetros de un efecto sin reconstruirlo.
     SetEffectParams(Option<TrackId>, usize, EffectParams),
     SetEffectEnabled(Option<TrackId>, usize, bool),
+    /// Sustituye los clips de una pista.
+    SetClips(TrackId, Box<Vec<ClipFrames>>),
     /// Grabando: el transporte sigue más allá del final de las pistas.
     SetFreeRun(bool),
     AttachMonitor(Box<Monitor>),
@@ -303,21 +308,21 @@ impl Engine {
 
     /// Añade una pista (estéreo entrelazado a `sample_rate()` Hz).
     pub fn add_track(&self, data: Arc<Vec<f32>>, sample_rate: u32) -> Result<TrackId, EngineError> {
-        self.add_track_at(data, sample_rate, 0)
+        let frames = (data.len() / 2) as u64;
+        self.add_track_with_clips(data, sample_rate, vec![ClipFrames::whole(0, frames)])
     }
 
-    /// Añade una pista que empieza en el frame `offset` de la línea de tiempo.
-    pub fn add_track_at(&self, data: Arc<Vec<f32>>, sample_rate: u32, offset: u64) -> Result<TrackId, EngineError> {
+    /// Añade una pista con sus clips (en frames del motor).
+    pub fn add_track_with_clips(&self, data: Arc<Vec<f32>>, sample_rate: u32, clips: Vec<ClipFrames>) -> Result<TrackId, EngineError> {
         if sample_rate != self.sample_rate {
             return Err(EngineError::SampleRate { expected: self.sample_rate, got: sample_rate });
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let frames = (data.len() / 2) as u64;
         let mut t = Box::new(EngineTrack {
             id,
             data,
-            offset,
-            frames,
+            end: clips_end(&clips),
+            clips,
             gain: 1.0,
             pan: 0.0,
             mute: false,
@@ -329,6 +334,11 @@ impl Engine {
         t.update_gains();
         self.send(Command::AddTrack(t))?;
         Ok(id)
+    }
+
+    /// Sustituye los clips de una pista sin cortar la reproducción.
+    pub fn set_clips(&self, id: TrackId, clips: Vec<ClipFrames>) -> Result<(), EngineError> {
+        self.send(Command::SetClips(id, Box::new(clips)))
     }
 
     pub fn remove_track(&self, id: TrackId) -> Result<(), EngineError> {
@@ -704,8 +714,8 @@ mod tests {
         let mut t = Box::new(EngineTrack {
             id,
             data: Arc::new(vec![value; frames * 2]),
-            offset: 0,
-            frames: frames as u64,
+            clips: vec![ClipFrames::whole(0, frames as u64)],
+            end: frames as u64,
             gain: 1.0,
             pan: 0.0,
             mute: false,
@@ -807,7 +817,8 @@ mod tests {
     #[test]
     fn offset_tracks_and_free_run() {
         let mut late = track(2, 0.5, 4);
-        late.offset = 4;
+        late.clips = vec![ClipFrames::whole(4, 4)];
+        late.end = 8;
         let (mut rt, mut tx) = rt_with(vec![track(1, 0.25, 2), late]);
         tx.push(Command::Play).ok();
         let mut out = vec![0.0f32; 2 * 10];
@@ -827,6 +838,24 @@ mod tests {
         tx.push(Command::SetFreeRun(false)).ok();
         rt.render(&mut out, 2);
         assert!(!rt.playing);
+    }
+
+    #[test]
+    fn clips_can_be_replaced_while_playing() {
+        let (mut rt, mut tx) = rt_with(vec![track(1, 0.5, 100)]);
+        tx.push(Command::Play).ok();
+        let mut out = vec![0.0f32; 2 * 10];
+        rt.render(&mut out, 2);
+        assert!(out.iter().all(|&s| s == 0.5));
+        // Solo dos tramos con media ganancia: 12..14 y 18..20.
+        let clip = |start| ClipFrames { start, src_start: 0, len: 2, fade_in: 0, fade_out: 0, gain: 0.5 };
+        tx.push(Command::SetClips(1, Box::new(vec![clip(12), clip(18)]))).ok();
+        rt.render(&mut out, 2);
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        assert_eq!(left, vec![0.0, 0.0, 0.25, 0.25, 0.0, 0.0, 0.0, 0.0, 0.25, 0.25]);
+        assert_eq!(rt.shared.length.load(Ordering::Relaxed), 20, "la duración sigue a los clips");
+        rt.render(&mut out, 2);
+        assert!(!rt.playing, "termina al acabar el último clip");
     }
 
     #[test]

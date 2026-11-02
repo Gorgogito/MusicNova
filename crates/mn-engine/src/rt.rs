@@ -335,6 +335,13 @@ impl RtState {
                     c.set_enabled(index, enabled);
                 }
             }
+            Command::SetClips(id, clips) => {
+                if let Some(t) = find(&mut self.tracks, id) {
+                    let old = std::mem::replace(&mut t.clips, *clips);
+                    t.end = mn_core::mix::clips_end(&t.clips);
+                    self.discard(Garbage::Clips(old));
+                }
+            }
             Command::SetFreeRun(on) => self.free_run = on,
             Command::AttachMonitor(m) => {
                 if let Some(old) = self.monitor.replace(m) {
@@ -410,16 +417,8 @@ impl RtState {
             if t.mute || (any_solo && !t.solo) {
                 continue;
             }
-            for (f, &p) in self.src_pos[..frames].iter().enumerate() {
-                let (l, r) = if p >= t.offset && p - t.offset < t.frames {
-                    let i = ((p - t.offset) * 2) as usize;
-                    (t.data[i], t.data[i + 1])
-                } else {
-                    (0.0, 0.0)
-                };
-                track_buf[f * 2] = l;
-                track_buf[f * 2 + 1] = r;
-            }
+            track_buf.fill(0.0);
+            mn_core::mix::render_clips(&t.data, &t.clips, &self.src_pos[..frames], track_buf);
             if let Some(chain) = t.chain.as_deref_mut() {
                 chain.process(track_buf);
             }

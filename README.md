@@ -65,6 +65,10 @@ Variables opcionales:
 | − / = | Velocidad −5 % / +5 % |
 | , / . | Tono −1 / +1 semitono |
 | K | Metrónomo |
+| S | Dividir en el cabezal (el clip seleccionado o todos los que estén debajo) |
+| Supr | Eliminar el clip seleccionado |
+| Ctrl+Z / Ctrl+Mayús+Z | Deshacer / rehacer la edición de clips |
+| Ctrl + rueda | Zoom horizontal |
 
 ## Añadir un modelo
 

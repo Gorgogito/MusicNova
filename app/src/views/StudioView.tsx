@@ -1,10 +1,11 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ask } from '@tauri-apps/plugin-dialog'
 import {
   api,
   errorMessage,
   timelineEnd,
   type Analysis,
+  type Clip,
   type EffectSlot,
   type Lyrics,
   type MasterSettings,
@@ -24,7 +25,8 @@ import { ExportPanel } from '../components/ExportPanel'
 import { Icon } from '../components/Icon'
 import { formatTime } from '../lib/format'
 import { TRACK_KINDS } from '../lib/tracks'
-import { Waveform } from '../components/Waveform'
+import { ClipLane } from '../components/ClipLane'
+import { snapGrid, snapTo, splitAt } from '../lib/clips'
 import { AnalysisPanel } from '../components/AnalysisPanel'
 import { AnalysisLanes } from '../components/AnalysisLanes'
 import type { AnalysisJob } from '../lib/useAnalysis'
@@ -41,6 +43,7 @@ interface Props {
   transport: TransportEvent
   recorder: Recorder
   onTrackRemoved: (trackId: string) => void
+  onClipsChange: (trackId: string, clips: Clip[]) => void
   onTrackChange: (t: TrackInfo) => void
   onError: (msg: string) => void
   separation: {
@@ -73,12 +76,19 @@ interface Props {
 type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record'
 
 const HEADER_W = 280
+const MAX_ZOOM = 64
+/** Separaciones posibles entre marcas de la regla (s). */
+const TICK_STEPS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
+
+/** Cambio de clips en una o varias pistas (una entrada del historial). */
+type Edit = { trackId: string; before: Clip[]; after: Clip[] }[]
 
 export function StudioView({
   project,
   transport,
   recorder,
   onTrackRemoved,
+  onClipsChange,
   onTrackChange,
   onError,
   separation,
@@ -152,10 +162,165 @@ export function StudioView({
     api.analysisUpdate(a).then(onAnalysisChange).catch((err) => onError(errorMessage(err)))
   }
   const tracksEnd = useMemo(() => timelineEnd(project.tracks), [project])
+  // Mientras se arrastra un clip la escala no cambia (si no, el clip «huiría» del ratón).
+  const [frozenDuration, setFrozenDuration] = useState<number | null>(null)
   // Mientras se graba, la línea de tiempo crece con la toma.
-  const duration = Math.max(0.001, tracksEnd, recording ? position + 1 : 0)
+  const duration = frozenDuration ?? Math.max(0.001, tracksEnd, recording ? position + 1 : 0)
   const anySolo = project.tracks.some((t) => t.solo)
   const lanesRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // ---- Zoom horizontal ----------------------------------------------------
+  const [zoom, setZoomState] = useState(1)
+  const [viewW, setViewW] = useState(1000)
+  const zoomAnchor = useRef<{ time: number; clientX: number } | null>(null)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setViewW(el.clientWidth))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const laneW = Math.max(1, (viewW - HEADER_W) * zoom)
+  const setZoom = useCallback(
+    (z: number, anchorClientX?: number) => {
+      const el = scrollRef.current
+      const next = Math.min(MAX_ZOOM, Math.max(1, z))
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        const clientX = anchorClientX ?? rect.left + HEADER_W + (rect.width - HEADER_W) / 2
+        const x = el.scrollLeft + clientX - rect.left - HEADER_W
+        zoomAnchor.current = { time: Math.max(0, x / laneW) * duration, clientX }
+      }
+      setZoomState(next)
+    },
+    [laneW, duration],
+  )
+  // Tras cambiar el zoom, el instante bajo el ratón (o el centro) se queda en su sitio.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const a = zoomAnchor.current
+    if (!el || !a) return
+    zoomAnchor.current = null
+    const rect = el.getBoundingClientRect()
+    el.scrollLeft = (a.time / duration) * laneW - (a.clientX - rect.left - HEADER_W)
+  }, [zoom, laneW, duration])
+  // Ctrl + rueda: zoom (el listener no puede ser pasivo para evitar el desplazamiento).
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setZoom(zoom * (e.deltaY < 0 ? 1.25 : 0.8), e.clientX)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoom, setZoom])
+  // Con zoom, la vista sigue al cabezal mientras suena.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || zoom <= 1 || !transport.playing) return
+    const x = (position / duration) * laneW
+    const visible = el.clientWidth - HEADER_W
+    if (x < el.scrollLeft || x > el.scrollLeft + visible - 40) el.scrollLeft = x - 40
+  }, [position, zoom, laneW, duration, transport.playing])
+
+  // ---- Edición de clips -----------------------------------------------------
+  const [selected, setSelected] = useState<{ trackId: string; clipId: string } | null>(null)
+  const [snapOn, setSnapOn] = usePref<'on' | 'off'>('snap', 'on', ['on', 'off'])
+  const grid = useMemo(() => snapGrid(practice, analysis, tracksEnd), [practice, analysis, tracksEnd])
+  const snap = useCallback(
+    (t: number, pxPerSec: number, free: boolean) => (snapOn === 'off' || free ? t : snapTo(grid, t, 10 / pxPerSec)),
+    [snapOn, grid],
+  )
+  const undoStack = useRef<Edit[]>([])
+  const redoStack = useRef<Edit[]>([])
+  // Tamaños de las pilas para la interfaz (las pilas viven en refs). El
+  // historial se reinicia al cambiar de proyecto porque la vista se monta de nuevo.
+  const [history, setHistory] = useState({ undo: 0, redo: 0 })
+  const syncHistory = () => setHistory({ undo: undoStack.current.length, redo: redoStack.current.length })
+
+  const saveClips = useCallback(
+    (trackId: string, clips: Clip[]) => {
+      onClipsChange(trackId, clips)
+      api
+        .clipsSet(trackId, clips)
+        .then((saved) => onClipsChange(trackId, saved))
+        .catch((err) => onError(errorMessage(err)))
+    },
+    [onClipsChange, onError],
+  )
+  const commitEdit = useCallback(
+    (edit: Edit) => {
+      const changed = edit.filter((e) => JSON.stringify(e.before) !== JSON.stringify(e.after))
+      if (changed.length === 0) return
+      undoStack.current.push(changed)
+      if (undoStack.current.length > 200) undoStack.current.shift()
+      redoStack.current = []
+      syncHistory()
+      changed.forEach((e) => saveClips(e.trackId, e.after))
+    },
+    [saveClips],
+  )
+  const undo = useCallback(() => {
+    const e = undoStack.current.pop()
+    if (!e) return
+    redoStack.current.push(e)
+    syncHistory()
+    e.forEach((c) => saveClips(c.trackId, c.before))
+  }, [saveClips])
+  const redo = useCallback(() => {
+    const e = redoStack.current.pop()
+    if (!e) return
+    undoStack.current.push(e)
+    syncHistory()
+    e.forEach((c) => saveClips(c.trackId, c.after))
+  }, [saveClips])
+
+  /** Divide en el cabezal el clip seleccionado o, sin selección, todos los clips bajo el cabezal. */
+  const splitAtPlayhead = useCallback(() => {
+    const edit: Edit = []
+    for (const t of project.tracks) {
+      if (selected && selected.trackId !== t.id) continue
+      const after = splitAt(t.clips, position, selected?.clipId)
+      if (after) edit.push({ trackId: t.id, before: t.clips, after })
+    }
+    commitEdit(edit)
+  }, [project.tracks, selected, position, commitEdit])
+
+  const deleteSelected = useCallback(() => {
+    if (!selected) return
+    const t = project.tracks.find((x) => x.id === selected.trackId)
+    if (!t) return
+    commitEdit([{ trackId: t.id, before: t.clips, after: t.clips.filter((c) => c.id !== selected.clipId) }])
+    setSelected(null)
+  }, [project.tracks, selected, commitEdit, setSelected])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      if (target.closest('input[type="text"], input[type="number"], textarea, select') || recording) return
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && e.code === 'KeyZ') {
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
+      } else if (mod && e.code === 'KeyY') {
+        e.preventDefault()
+        redo()
+      } else if (!mod && !e.altKey && e.code === 'KeyS') {
+        splitAtPlayhead()
+      } else if (!mod && (e.code === 'Delete' || e.code === 'Backspace')) {
+        e.preventDefault()
+        deleteSelected()
+      } else if (!mod && e.code === 'Escape') {
+        setSelected(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo, splitAtPlayhead, deleteSelected, recording])
 
   const timeAt = (clientX: number): number | null => {
     const el = lanesRef.current
@@ -182,11 +347,6 @@ export function StudioView({
       .trackRemove(t.id)
       .then(() => onTrackRemoved(t.id))
       .catch((err) => onError(errorMessage(err)))
-  }
-
-  const seekFromEvent = (e: React.MouseEvent) => {
-    const t = timeAt(e.clientX)
-    if (t != null) seek(t)
   }
 
   // Arrastrar sobre la regla crea un bucle; un clic simple solo salta.
@@ -226,12 +386,16 @@ export function StudioView({
     api.updateTrack(t.id, patch).then(onTrackChange).catch((err) => onError(errorMessage(err)))
   }
 
+  const tickStep = useMemo(() => {
+    const pxPerSec = laneW / duration
+    return TICK_STEPS.find((st) => st * pxPerSec >= 70) ?? TICK_STEPS[TICK_STEPS.length - 1]
+  }, [laneW, duration])
   const ticks = useMemo(() => {
-    const step = duration > 600 ? 60 : duration > 240 ? 30 : duration > 60 ? 10 : 5
     const out: number[] = []
-    for (let s = 0; s <= duration; s += step) out.push(s)
+    for (let i = 0; i * tickStep <= duration && out.length < 5000; i++) out.push(+(i * tickStep).toFixed(3))
     return out
-  }, [duration])
+  }, [duration, tickStep])
+  const selectedTrack = selected ? project.tracks.find((t) => t.id === selected.trackId) : undefined
 
   const playheadPct = `${Math.min(100, (position / duration) * 100)}%`
 
@@ -385,13 +549,61 @@ export function StudioView({
         />
       )}
 
-      <div className="lanes" ref={lanesRef} style={{ ['--header-w' as string]: `${HEADER_W}px` }}>
+      <div className="edit-bar">
+        <button className="btn ghost small" onClick={undo} disabled={history.undo === 0 || recording} title="Deshacer (Ctrl+Z)">
+          <Icon name="undo" size={15} /> Deshacer
+        </button>
+        <button className="btn ghost small" onClick={redo} disabled={history.redo === 0 || recording} title="Rehacer (Ctrl+Mayús+Z)">
+          <Icon name="redo" size={15} /> Rehacer
+        </button>
+        <button
+          className="btn ghost small"
+          onClick={splitAtPlayhead}
+          disabled={recording}
+          title="Dividir en el cabezal el clip seleccionado o, sin selección, todos los clips bajo el cabezal (S)"
+        >
+          <Icon name="scissors" size={15} /> Dividir
+        </button>
+        <button className="btn ghost small" onClick={deleteSelected} disabled={!selectedTrack || recording} title="Eliminar el clip seleccionado (Supr)">
+          <Icon name="trash" size={15} /> Eliminar clip
+        </button>
+        <label className="check small" title="Al mover o recortar, los bordes se pegan a los pulsos (mantén Alt para moverlos libremente)">
+          <input type="checkbox" checked={snapOn === 'on'} onChange={(e) => setSnapOn(e.target.checked ? 'on' : 'off')} />
+          Ajustar a pulsos
+        </label>
+        <div className="zoom">
+          <button className="icon-btn small" onClick={() => setZoom(zoom / 1.5)} disabled={zoom <= 1} title="Alejar">
+            −
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={Math.log2(MAX_ZOOM)}
+            step={0.05}
+            value={Math.log2(zoom)}
+            onChange={(e) => setZoom(2 ** Number(e.target.value))}
+            aria-label="Zoom"
+            title="Zoom (Ctrl + rueda)"
+          />
+          <button className="icon-btn small" onClick={() => setZoom(zoom * 1.5)} disabled={zoom >= MAX_ZOOM} title="Acercar">
+            +
+          </button>
+          <span className="small mono muted">{zoom < 10 ? zoom.toFixed(1) : Math.round(zoom)}×</span>
+        </div>
+      </div>
+
+      <div className="lanes-scroll" ref={scrollRef}>
+      <div
+        className="lanes"
+        ref={lanesRef}
+        style={{ ['--header-w' as string]: `${HEADER_W}px`, width: `${HEADER_W + laneW}px`, minWidth: '100%' }}
+      >
         <div className="ruler" onMouseDown={onRulerDown}>
           <div className="ruler-spacer" />
           <div className="ruler-track">
             {ticks.map((s) => (
               <span key={s} className="tick" style={{ left: `${(s / duration) * 100}%` }}>
-                {formatTime(s).slice(0, -3)}
+                {tickStep < 1 ? formatTime(s) : formatTime(s).slice(0, -3)}
               </span>
             ))}
           </div>
@@ -487,16 +699,26 @@ export function StudioView({
                   </span>
                 </label>
               </div>
-              <div className="lane-wave" onMouseDown={seekFromEvent}>
-                <Waveform
-                  peaks={t.peaks}
-                  timelineDuration={duration}
-                  offset={t.offset}
-                  sampleRate={project.sample_rate}
-                  color={kind.color}
-                  dimmed={!audible}
-                />
-              </div>
+              <ClipLane
+                track={t}
+                duration={duration}
+                sampleRate={project.sample_rate}
+                color={kind.color}
+                dimmed={!audible}
+                selected={selected?.trackId === t.id ? selected.clipId : null}
+                locked={recording}
+                snap={snap}
+                onSelect={(clipId) => setSelected(clipId ? { trackId: t.id, clipId } : null)}
+                onSeek={seek}
+                onPreview={(clips) => {
+                  setFrozenDuration((d) => d ?? duration * 1.25)
+                  onClipsChange(t.id, clips)
+                }}
+                onCommit={(before, after) => {
+                  setFrozenDuration(null)
+                  commitEdit([{ trackId: t.id, before, after }])
+                }}
+              />
             </div>
           )
         })}
@@ -525,9 +747,12 @@ export function StudioView({
           <div className="playhead" style={{ left: playheadPct }} />
         </div>
       </div>
+      </div>
 
       <p className="hint muted small">
-        Haz clic en la forma de onda para saltar a esa posición. Barra espaciadora: reproducir o pausar.
+        Clic: saltar a esa posición. Arrastra un clip para moverlo, sus bordes para recortarlo y los tiradores de
+        arriba para los fundidos. S divide en el cabezal, Supr borra el clip, Ctrl+Z deshace. Alt desactiva el ajuste a
+        pulsos.
       </p>
     </section>
   )

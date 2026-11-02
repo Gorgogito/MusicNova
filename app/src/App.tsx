@@ -7,6 +7,7 @@ import {
   timelineEnd,
   type Analysis,
   type AppInfo,
+  type Clip,
   type Lyrics,
   type MasterReferenceResult,
   type MasterSettings,
@@ -284,6 +285,11 @@ export default function App() {
     )
   }, [])
 
+  const onClipsChange = useCallback((id: string, clips: Clip[]) => {
+    const withClips = <T extends { id: string; clips: Clip[] }>(t: T): T => (t.id === id ? { ...t, clips } : t)
+    setProject((p) => p && { ...p, tracks: p.tracks.map(withClips), project: { ...p.project, tracks: p.project.tracks.map(withClips) } })
+  }, [])
+
   const onTrackChange = useCallback((t: TrackInfo) => {
     setProject((p) => p && { ...p, tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, ...t } : x)) })
   }, [])
@@ -365,10 +371,12 @@ export default function App() {
         )}
         {view === 'studio' && project && (
           <StudioView
+            key={project.dir}
             project={project}
             transport={transport}
             recorder={recorder}
             onTrackRemoved={onTrackRemoved}
+            onClipsChange={onClipsChange}
             onTrackChange={onTrackChange}
             onError={showError}
             separation={separation}
