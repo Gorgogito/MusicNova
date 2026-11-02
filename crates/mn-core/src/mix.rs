@@ -132,6 +132,9 @@ pub struct MixInput<'a> {
     pub effects: &'a [EffectSlot],
     /// Automatización de la pista (a la frecuencia de la mezcla).
     pub automation: Option<&'a ChannelAutomation>,
+    /// Índice (en la lista de entradas) de la pista que alimenta el sidechain
+    /// de sus efectos: su audio sin efectos ni volumen, aunque esté silenciada.
+    pub sidechain: Option<usize>,
 }
 
 /// Mezcla las pistas exactamente como suenan en el motor: silencio, solo,
@@ -146,6 +149,7 @@ pub fn mixdown(
     let any_solo = inputs.iter().any(|t| t.solo);
     let mut data = vec![0.0f32; len];
     let mut block = vec![0.0f32; BLOCK * 2];
+    let mut key = vec![0.0f32; BLOCK * 2];
     let mut pos = vec![0u64; BLOCK];
     for t in inputs {
         if t.mute || (any_solo && !t.solo) {
@@ -173,7 +177,12 @@ pub fn mixdown(
                 if let Some(a) = t.automation {
                     a.apply_effects(c, start as u64);
                 }
-                c.process(&mut block[..n * 2]);
+                let src = t.sidechain.and_then(|j| inputs.get(j));
+                if let Some(s) = src {
+                    key[..n * 2].fill(0.0);
+                    render_clips(s.data, s.clips, &pos[..n], &mut key[..n * 2]);
+                }
+                c.process_with_key(&mut block[..n * 2], src.map(|_| &key[..n * 2]));
             }
             // Frame procesado `start + k` → posición `start + k − lat`.
             let from = lat.saturating_sub(start);
@@ -258,7 +267,7 @@ mod tests {
     }
 
     fn input<'a>(data: &'a [f32], clips: &'a [ClipFrames], gain_db: f32, pan: f32, solo: bool) -> MixInput<'a> {
-        MixInput { data, clips, gain_db, pan, mute: false, solo, effects: &[], automation: None }
+        MixInput { data, clips, gain_db, pan, mute: false, solo, effects: &[], automation: None, sidechain: None }
     }
 
     #[test]
@@ -361,7 +370,7 @@ mod tests {
             })
             .collect();
         let lim = |ceiling_db| {
-            vec![EffectSlot { plugin: None,
+            vec![EffectSlot { plugin: None, sidechain: None,
                 id: "l".into(),
                 enabled: true,
                 params: EffectParams::Limiter(LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0, true_peak: false }),
@@ -370,7 +379,7 @@ mod tests {
         let track_fx = lim(-12.0);
         let peak = |b: &AudioBuffer| b.data.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         let cs = whole(&sine);
-        let t = MixInput { data: &sine, clips: &cs, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &track_fx, automation: None };
+        let t = MixInput { data: &sine, clips: &cs, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &track_fx, automation: None, sidechain: None };
         let m = mixdown(&[t], &MasterSettings::default(), None, sr);
         assert!((0.24..=0.2512).contains(&peak(&m)), "{}", peak(&m));
 

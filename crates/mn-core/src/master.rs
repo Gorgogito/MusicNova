@@ -39,7 +39,7 @@ pub fn user_master_effects(effects: &[EffectSlot]) -> Vec<EffectSlot> {
 /// Cadena de máster resultante: la del usuario más el limitador automático al final.
 pub fn with_auto_limiter(effects: &[EffectSlot], input_db: f32, ceiling_db: f32) -> Vec<EffectSlot> {
     let mut out = user_master_effects(effects);
-    out.push(EffectSlot { plugin: None,
+    out.push(EffectSlot { plugin: None, sidechain: None,
         id: AUTO_LIMITER_ID.into(),
         enabled: true,
         params: EffectParams::Limiter(LimiterParams { input_db, ceiling_db, release_ms: 80.0, true_peak: true }),
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn keeps_user_effects_and_replaces_auto_limiter() {
-        let user = vec![EffectSlot { plugin: None, id: "eq".into(), enabled: true, params: EffectParams::Eq(Default::default()) }];
+        let user = vec![EffectSlot { plugin: None, sidechain: None, id: "eq".into(), enabled: true, params: EffectParams::Eq(Default::default()) }];
         let chain = with_auto_limiter(&with_auto_limiter(&user, 3.0, -1.0), 5.0, -2.0);
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[0].id, "eq");

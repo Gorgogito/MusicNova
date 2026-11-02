@@ -17,10 +17,12 @@ import { FORMAT_LABEL, pluginSlot, usePlugins } from '../lib/plugins'
 interface Props {
   effects: EffectSlot[]
   onChange: (effects: EffectSlot[]) => void
+  /** Pistas que pueden alimentar el sidechain del compresor (sin la propia; vacío en el máster). */
+  sidechainSources?: { id: string; name: string }[]
 }
 
 /** Cadena de efectos editable: añadir, ordenar, activar, quitar y ajustar. */
-export function EffectRack({ effects, onChange }: Props) {
+export function EffectRack({ effects, onChange, sidechainSources = [] }: Props) {
   const { cache } = usePlugins()
   const plugins = cache?.plugins ?? []
   const update = (i: number, slot: EffectSlot) => onChange(effects.map((s, j) => (j === i ? slot : s)))
@@ -93,6 +95,25 @@ ${plugin.path}` : ''}>
                     onChange={(e) => update(i, { ...slot, params: { ...delay, ping_pong: e.target.checked } })}
                   />
                   Ping-pong
+                </label>
+              )}
+              {type === 'compressor' && sidechainSources.length > 0 && (
+                <label
+                  className="field small"
+                  title="El compresor reacciona al nivel de otra pista (p. ej. el bombo hace «respirar» al bajo o a un pad). Funciona aunque esa pista esté silenciada"
+                >
+                  <span className="small muted">Sidechain</span>
+                  <select
+                    value={slot.sidechain ?? ''}
+                    onChange={(e) => update(i, { ...slot, sidechain: e.target.value || null })}
+                  >
+                    <option value="">Ninguno (su propia señal)</option>
+                    {sidechainSources.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               )}
               {limiter && (

@@ -46,15 +46,31 @@ impl Compressor {
     }
 }
 
+impl Compressor {
+    /// Ganancia del próximo frame según el pico de la señal de detección.
+    #[inline]
+    fn gain_for(&mut self, peak: f32) -> f32 {
+        let target = self.static_gr(20.0 * peak.max(1e-9).log10());
+        // Más reducción → ataque; menos → liberación.
+        let coef = if target > self.gr_db { self.attack } else { self.release };
+        self.gr_db = target + coef * (self.gr_db - target);
+        db_to_lin(-self.gr_db) * self.makeup
+    }
+}
+
 impl Processor for Compressor {
     fn process(&mut self, buf: &mut [f32]) {
         for frame in buf.chunks_exact_mut(2) {
-            let peak = frame[0].abs().max(frame[1].abs()).max(1e-9);
-            let target = self.static_gr(20.0 * peak.log10());
-            // Más reducción → ataque; menos → liberación.
-            let coef = if target > self.gr_db { self.attack } else { self.release };
-            self.gr_db = target + coef * (self.gr_db - target);
-            let g = db_to_lin(-self.gr_db) * self.makeup;
+            let g = self.gain_for(frame[0].abs().max(frame[1].abs()));
+            frame[0] *= g;
+            frame[1] *= g;
+        }
+    }
+
+    /// Sidechain: el nivel se mide en `key` (p. ej. el bombo) y se aplica a `buf`.
+    fn process_keyed(&mut self, buf: &mut [f32], key: &[f32]) {
+        for (frame, k) in buf.chunks_exact_mut(2).zip(key.chunks_exact(2)) {
+            let g = self.gain_for(k[0].abs().max(k[1].abs()));
             frame[0] *= g;
             frame[1] *= g;
         }
@@ -115,5 +131,20 @@ mod tests {
         let orig = quiet.clone();
         c.process(&mut quiet);
         assert_eq!(quiet, orig);
+    }
+
+    #[test]
+    fn sidechain_ducks_with_the_key_signal() {
+        // Pista sostenida a −12 dBFS; la clave (bombo) suena solo en la primera mitad.
+        let p = CompressorParams { threshold_db: -30.0, ratio: 8.0, knee_db: 0.0, attack_ms: 1.0, release_ms: 20.0, makeup_db: 0.0 };
+        let mut c = Compressor::new(p, 48_000.0);
+        let mut pad = sine(db_to_lin(-12.0), 48_000);
+        let key: Vec<f32> = sine(db_to_lin(-6.0), 48_000).iter().enumerate().map(|(i, s)| if i < 48_000 { *s } else { 0.0 }).collect();
+        c.process_keyed(&mut pad, &key);
+        let ducked = level_db(&pad[12_000..44_000]);
+        let free = level_db(&pad[60_000..]);
+        // Con la clave sonando la pista baja ≈ (−6 − (−30))·(1 − 1/8) = 21 dB; sin ella, nada.
+        assert!(ducked < -30.0, "{ducked}");
+        assert!((free + 12.0).abs() < 0.5, "{free}");
     }
 }

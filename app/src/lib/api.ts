@@ -29,6 +29,8 @@ export interface EffectSlot {
   params: EffectParams
   /** Plugin externo (solo si `params.type` es 'plugin'). */
   plugin?: PluginRef
+  /** Pista que controla el efecto (sidechain del compresor). */
+  sidechain?: string | null
 }
 
 export interface PluginRef {

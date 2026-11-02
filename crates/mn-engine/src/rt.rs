@@ -24,7 +24,7 @@ const MIN_TEMPO: f64 = 0.25;
 /// Golpes de metrónomo pendientes (incluye la cuenta previa).
 const MAX_PENDING_CLICKS: usize = 32;
 /// Frames de entrada máximos por bloque (con el tempo al máximo).
-const MAX_IN_FRAMES: usize = (BLOCK as f64 * MAX_TEMPO) as usize + 4;
+pub(crate) const MAX_IN_FRAMES: usize = (BLOCK as f64 * MAX_TEMPO) as usize + 4;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClickKind {
@@ -318,6 +318,11 @@ impl RtState {
                 self.metronome_on = enabled;
                 self.metronome_gain = gain;
             }
+            Command::SetSidechain(id, source) => {
+                if let Some(t) = find(&mut self.tracks, id) {
+                    t.sidechain = source.filter(|s| *s != id);
+                }
+            }
             Command::SetChain(target, chain) => {
                 let old = match target {
                     None => self.master_chain.replace(chain),
@@ -446,6 +451,19 @@ impl RtState {
         // llegar a la de la pista con más latencia (también las silenciadas, para
         // que la alineación no cambie al silenciar).
         let max_lat = self.tracks.iter().map(|t| t.latency()).max().unwrap_or(0);
+        // Sidechain: audio de la pista fuente (sin efectos ni volumen) en las mismas posiciones.
+        for i in 0..self.tracks.len() {
+            let Some(source) = self.tracks[i].sidechain else { continue };
+            let Some(j) = self.tracks.iter().position(|t| t.id == source) else {
+                self.tracks[i].key_valid = false;
+                continue;
+            };
+            let mut key = std::mem::take(&mut self.tracks[i].key);
+            key[..frames * 2].fill(0.0);
+            mn_core::mix::render_clips(&self.tracks[j].data, &self.tracks[j].clips, src, &mut key[..frames * 2]);
+            self.tracks[i].key = key;
+            self.tracks[i].key_valid = true;
+        }
         self.pdc_tracks = max_lat;
         for t in &mut self.tracks {
             let comp = max_lat - t.latency();
@@ -462,7 +480,8 @@ impl RtState {
                 if let Some((a, (p0, _))) = auto {
                     a.apply_effects(chain, p0);
                 }
-                chain.process(track_buf);
+                let key = t.key_valid.then(|| &t.key[..frames * 2]);
+                chain.process_with_key(track_buf, key);
             }
             crate::delay_line(&mut t.pdc, &mut t.pdc_pos, track_buf, comp);
             let out = &mut out[..frames * 2];

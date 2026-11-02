@@ -203,6 +203,12 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
         ids.insert(info.id, id);
         tracks.push(TrackView { info: info.clone(), duration, peaks });
     }
+    // Sidechains: cuando ya están todas las pistas en el motor.
+    for info in &project.tracks {
+        if let (Some(&id), Some(src)) = (ids.get(&info.id), sidechain_source(&info.effects)) {
+            engine.set_sidechain(id, ids.get(&src).copied()).map_err(err)?;
+        }
+    }
 
     // Un análisis ilegible no impide abrir el proyecto: se puede repetir.
     let analysis = Analysis::load(&dir).unwrap_or_else(|e| {
@@ -892,6 +898,19 @@ fn automations(project: &Project, rate: u32) -> HashMap<Uuid, ChannelAutomation>
 /// Carpeta (relativa al proyecto) de los masters generados.
 const MASTER_DIR: &str = "audio/master/";
 
+/// Pista que alimenta el sidechain de una cadena (la del primer efecto que lo use).
+pub(crate) fn sidechain_source(effects: &[EffectSlot]) -> Option<Uuid> {
+    effects.iter().filter(|s| s.enabled).find_map(|s| s.sidechain.as_deref()?.parse().ok())
+}
+
+/// Enlaza cada entrada de la mezcla (`ids[i]` es su pista) con la entrada de su sidechain.
+fn link_sidechains(project: &Project, ids: &[Uuid], inputs: &mut [MixInput]) {
+    for (i, inp) in inputs.iter_mut().enumerate() {
+        let src = project.tracks.iter().find(|t| t.id == ids[i]).and_then(|t| sidechain_source(&t.effects));
+        inp.sidechain = src.and_then(|s| ids.iter().position(|x| *x == s)).filter(|&j| j != i);
+    }
+}
+
 /// Premezcla: las pistas con sus efectos, volumen y panorama, sin el bus
 /// máster ni los masters ya generados. Devuelve el audio a la frecuencia del motor.
 fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, u32), String> {
@@ -905,7 +924,7 @@ fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, 
     };
     let clip_sets = clip_sets(&project, &buffers, rate);
     let autos = automations(&project, rate);
-    let inputs: Vec<MixInput> = project
+    let mut inputs: Vec<MixInput> = project
         .tracks
         .iter()
         .filter(|t| !t.file.starts_with(MASTER_DIR))
@@ -919,9 +938,13 @@ fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, 
                 solo: t.solo,
                 effects: &t.effects,
                 automation: autos.get(&t.id),
+                sidechain: None,
             })
         })
         .collect();
+    let ids: Vec<Uuid> =
+        project.tracks.iter().filter(|t| !t.file.starts_with(MASTER_DIR) && buffers.contains_key(&t.id)).map(|t| t.id).collect();
+    link_sidechains(&project, &ids, &mut inputs);
     if inputs.is_empty() {
         return Err("no hay pistas que masterizar".into());
     }
@@ -1068,7 +1091,7 @@ fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<
     let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
     let (current, lanes) = channel_mut(project, track_id)?;
     let same_layout = current.len() == effects.len()
-        && current.iter().zip(&effects).all(|(a, b)| a.id == b.id && a.params.kind() == b.params.kind());
+        && current.iter().zip(&effects).all(|(a, b)| a.id == b.id && a.params.kind() == b.params.kind() && a.sidechain == b.sidechain);
     if same_layout {
         for (i, (old, new)) in current.iter().zip(&effects).enumerate() {
             if old.params != new.params {
@@ -1080,6 +1103,10 @@ fn effects_set(state: State<'_, AppState>, track_id: Option<Uuid>, effects: Vec<
         }
     } else {
         engine.set_effects(engine_id, &effects).map_err(err)?;
+    }
+    if let Some(id) = engine_id {
+        let source = sidechain_source(&effects).and_then(|src| s.engine_ids.get(&src).copied());
+        engine.set_sidechain(id, source).map_err(err)?;
     }
     *current = effects.clone();
     if !lanes.is_empty() {
@@ -1147,7 +1174,7 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
         };
         let clip_sets = clip_sets(&project, &buffers, rate);
         let autos = automations(&project, rate);
-        let inputs: Vec<MixInput> = project
+        let mut inputs: Vec<MixInput> = project
             .tracks
             .iter()
             .filter_map(|t| {
@@ -1162,9 +1189,12 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
                         solo: t.solo,
                         effects: &t.effects,
                         automation: autos.get(&t.id),
+                sidechain: None,
                     })
             })
             .collect();
+        let ids: Vec<Uuid> = project.tracks.iter().filter(|t| buffers.contains_key(&t.id)).map(|t| t.id).collect();
+        link_sidechains(&project, &ids, &mut inputs);
         let master_auto = ChannelAutomation::build(&project.master.automation, &project.master.effects, rate);
         let mixed = audio::resample(&mixdown(&inputs, &project.master, master_auto.as_ref(), rate), native_rate).map_err(err)?;
         let report = loudness::measure(&mixed.data, mixed.sample_rate);

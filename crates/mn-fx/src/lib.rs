@@ -309,6 +309,10 @@ pub struct EffectSlot {
     /// Plugin externo y su estado (solo si `params` es `Plugin`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginRef>,
+    /// Pista cuya señal controla el efecto (sidechain; id del proyecto). Solo
+    /// la usa el compresor: detecta el nivel de esa pista en vez del suyo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<String>,
 }
 
 /// Referencia a un plugin externo tal como se guarda en el proyecto.
@@ -373,6 +377,11 @@ pub trait Processor: Send {
     fn latency(&self) -> usize {
         0
     }
+    /// Procesa con una señal de control externa (`key`, mismo tamaño que
+    /// `buf`). Por defecto se ignora.
+    fn process_keyed(&mut self, buf: &mut [f32], _key: &[f32]) {
+        self.process(buf)
+    }
 }
 
 /// Crea el procesador de un efecto (reserva memoria: fuera del hilo de audio).
@@ -391,18 +400,38 @@ pub fn build(params: &EffectParams, sample_rate: u32) -> Box<dyn Processor> {
 /// Cadena de efectos en serie.
 pub struct Chain {
     slots: Vec<(bool, Box<dyn Processor>)>,
+    /// Efectos que escuchan la señal de sidechain.
+    keyed: Vec<bool>,
 }
 
 impl Chain {
     /// Cadena para el motor en tiempo real.
     pub fn new(slots: &[EffectSlot], sample_rate: u32) -> Self {
-        Self { slots: slots.iter().map(|s| (s.enabled, build_slot(s, sample_rate, true))).collect() }
+        Self {
+            slots: slots.iter().map(|s| (s.enabled, build_slot(s, sample_rate, true))).collect(),
+            keyed: slots.iter().map(|s| s.sidechain.is_some()).collect(),
+        }
     }
 
     /// Cadena para procesar offline (exportar): los plugins externos son
     /// instancias propias, independientes de las del motor.
     pub fn new_offline(slots: &[EffectSlot], sample_rate: u32) -> Self {
-        Self { slots: slots.iter().map(|s| (s.enabled, build_slot(s, sample_rate, false))).collect() }
+        Self {
+            slots: slots.iter().map(|s| (s.enabled, build_slot(s, sample_rate, false))).collect(),
+            keyed: slots.iter().map(|s| s.sidechain.is_some()).collect(),
+        }
+    }
+
+    /// Procesa con la señal de sidechain `key` (si la hay) para los efectos que la escuchan.
+    pub fn process_with_key(&mut self, buf: &mut [f32], key: Option<&[f32]>) {
+        for ((on, p), keyed) in self.slots.iter_mut().zip(&self.keyed) {
+            if *on {
+                match key {
+                    Some(k) if *keyed => p.process_keyed(buf, k),
+                    _ => p.process(buf),
+                }
+            }
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -465,7 +494,7 @@ mod tests {
 
     #[test]
     fn params_roundtrip_json() {
-        let slot = EffectSlot { plugin: None, id: "a".into(), enabled: true, params: EffectParams::Delay(DelayParams::default()) };
+        let slot = EffectSlot { plugin: None, sidechain: None, id: "a".into(), enabled: true, params: EffectParams::Delay(DelayParams::default()) };
         let json = serde_json::to_string(&slot).unwrap();
         assert!(json.contains(r#""type":"delay""#), "{json}");
         let back: EffectSlot = serde_json::from_str(&json).unwrap();
@@ -505,8 +534,8 @@ mod tests {
     #[test]
     fn chain_runs_and_updates_in_place() {
         let slots = vec![
-            EffectSlot { plugin: None, id: "1".into(), enabled: true, params: EffectParams::Eq(EqParams::default()) },
-            EffectSlot { plugin: None, id: "2".into(), enabled: false, params: EffectParams::Reverb(ReverbParams::default()) },
+            EffectSlot { plugin: None, sidechain: None, id: "1".into(), enabled: true, params: EffectParams::Eq(EqParams::default()) },
+            EffectSlot { plugin: None, sidechain: None, id: "2".into(), enabled: false, params: EffectParams::Reverb(ReverbParams::default()) },
         ];
         let mut chain = Chain::new(&slots, 48_000);
         let mut buf = vec![0.25f32; 1024];

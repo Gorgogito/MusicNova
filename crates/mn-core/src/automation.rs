@@ -212,7 +212,7 @@ mod tests {
     }
 
     fn reverb() -> Vec<EffectSlot> {
-        vec![EffectSlot { plugin: None, id: "rv".into(), enabled: true, params: EffectParams::Reverb(ReverbParams::default()) }]
+        vec![EffectSlot { plugin: None, sidechain: None, id: "rv".into(), enabled: true, params: EffectParams::Reverb(ReverbParams::default()) }]
     }
 
     #[test]

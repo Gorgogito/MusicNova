@@ -57,7 +57,11 @@ export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffe
             <p className="small muted">
               Efectos de <strong>{track.name}</strong>: se aplican antes del volumen y el panorama, y también al exportar.
             </p>
-            <EffectRack effects={track.effects} onChange={(fx) => onTrackEffects(track.id, fx)} />
+            <EffectRack
+              effects={track.effects}
+              onChange={(fx) => onTrackEffects(track.id, fx)}
+              sidechainSources={tracks.filter((t) => t.id !== track.id).map((t) => ({ id: t.id, name: t.name }))}
+            />
           </>
         ) : (
           <>

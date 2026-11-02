@@ -72,6 +72,11 @@ pub(crate) struct EngineTrack {
     /// Línea de retardo para la compensación de latencia (reservada al crear la pista).
     pdc: Vec<[f32; 2]>,
     pdc_pos: usize,
+    /// Pista cuya señal alimenta el sidechain de esta cadena.
+    sidechain: Option<TrackId>,
+    /// Señal de sidechain del bloque actual (reservada al crear la pista).
+    key: Vec<f32>,
+    key_valid: bool,
 }
 
 /// Latencia máxima que se compensa (frames; ≈2,7 s a 48 kHz).
@@ -172,6 +177,7 @@ pub(crate) enum Command {
     SetMetronome { enabled: bool, gain: f32 },
     /// Sustituye la cadena de efectos de una pista (`None` = bus máster).
     SetChain(Option<TrackId>, Box<Chain>),
+    SetSidechain(TrackId, Option<TrackId>),
     /// Cambia los parámetros de un efecto sin reconstruirlo.
     SetEffectParams(Option<TrackId>, usize, EffectParams),
     SetEffectEnabled(Option<TrackId>, usize, bool),
@@ -376,6 +382,9 @@ impl Engine {
             automation: None,
             pdc: vec![[0.0; 2]; PDC_MAX],
             pdc_pos: 0,
+            sidechain: None,
+            key: vec![0.0; rt::MAX_IN_FRAMES * 2],
+            key_valid: false,
         });
         t.update_gains();
         self.send(Command::AddTrack(t))?;
@@ -507,6 +516,12 @@ impl Engine {
         // Se construye aquí (reserva memoria); el hilo de audio solo la intercambia.
         let chain = Box::new(Chain::new(slots, self.sample_rate));
         self.send(Command::SetChain(track, chain))
+    }
+
+    /// Pista cuya señal (sin efectos ni volumen) controla los efectos con
+    /// sidechain de `track` (p. ej. el bombo que hace «respirar» al bajo).
+    pub fn set_sidechain(&self, track: TrackId, source: Option<TrackId>) -> Result<(), EngineError> {
+        self.send(Command::SetSidechain(track, source))
     }
 
     /// Cambia los parámetros de un efecto de la cadena sin cortar su sonido.
@@ -778,6 +793,9 @@ mod tests {
             automation: None,
             pdc: vec![[0.0; 2]; PDC_MAX],
             pdc_pos: 0,
+            sidechain: None,
+            key: vec![0.0; rt::MAX_IN_FRAMES * 2],
+            key_valid: false,
         });
         t.update_gains();
         t
@@ -946,8 +964,8 @@ mod tests {
             enabled: true,
             points: pts.iter().map(|&(time, value)| AutoPoint { time, value }).collect(),
         };
-        let fx = vec![EffectSlot { plugin: None, id: "rv".into(), enabled: true, params: EffectParams::Reverb(mn_fx::ReverbParams::default()) }];
-        let master_fx = vec![EffectSlot { plugin: None, id: "eq".into(), enabled: true, params: EffectParams::Eq(mn_fx::EqParams::default()) }];
+        let fx = vec![EffectSlot { plugin: None, sidechain: None, id: "rv".into(), enabled: true, params: EffectParams::Reverb(mn_fx::ReverbParams::default()) }];
+        let master_fx = vec![EffectSlot { plugin: None, sidechain: None, id: "eq".into(), enabled: true, params: EffectParams::Eq(mn_fx::EqParams::default()) }];
         let lanes = vec![
             lane(AutomationTarget::Volume, &[(0.1, -20.0), (0.6, 3.0)]),
             lane(AutomationTarget::Pan, &[(0.0, -1.0), (0.8, 0.7)]),
@@ -973,7 +991,7 @@ mod tests {
 
         let clips = vec![ClipFrames::whole(0, frames as u64)];
         let auto = ChannelAutomation::build(&lanes, &fx, RATE).unwrap();
-        let input = MixInput { data: &data, clips: &clips, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &fx, automation: Some(&auto) };
+        let input = MixInput { data: &data, clips: &clips, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &fx, automation: Some(&auto), sidechain: None };
         let master = MasterSettings { gain_db: 0.0, effects: master_fx.clone(), automation: master_lanes.clone() };
         let master_auto = ChannelAutomation::build(&master_lanes, &master_fx, RATE).unwrap();
         let offline = mixdown(&[input], &master, Some(&master_auto), RATE);
@@ -985,6 +1003,44 @@ mod tests {
 
     fn uuid_like() -> uuid::Uuid {
         uuid::Uuid::new_v4()
+    }
+
+    /// Sidechain: el compresor de la pista 1 escucha la pista 2 (silenciada) y
+    /// el motor suena igual que la mezcla offline.
+    #[test]
+    fn sidechain_ducks_live_and_offline_alike() {
+        use mn_core::mix::{mixdown, MixInput};
+        use mn_core::project::MasterSettings;
+        let frames = RATE as usize;
+        let pad = sine_track(1, 330.0, frames);
+        let pad_data = pad.data.clone();
+        // Clave: fuerte la primera mitad, silencio después.
+        let key_data: Arc<Vec<f32>> = Arc::new((0..frames * 2).map(|i| if i < frames { 0.9 } else { 0.0 }).collect());
+        let mut key = track(2, 0.0, frames);
+        key.data = key_data.clone();
+        key.mute = true;
+        let comp = mn_fx::CompressorParams { threshold_db: -30.0, ratio: 10.0, knee_db: 0.0, attack_ms: 1.0, release_ms: 10.0, makeup_db: 0.0 };
+        let fx = vec![EffectSlot { plugin: None, sidechain: Some("clave".into()), id: "c".into(), enabled: true, params: EffectParams::Compressor(comp) }];
+        let (mut rt, mut tx) = rt_with(vec![pad, key]);
+        tx.push(Command::SetChain(Some(1), Box::new(Chain::new(&fx, RATE)))).ok();
+        tx.push(Command::SetSidechain(1, Some(2))).ok();
+        tx.push(Command::Play).ok();
+        let mut live = vec![0.0f32; frames * 2];
+        for chunk in live.chunks_mut(512 * 2) {
+            rt.render(chunk, 2);
+        }
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        let (ducked, free) = (rms(&live[frames / 4..frames * 3 / 4]), rms(&live[frames * 5 / 4..frames * 7 / 4]));
+        assert!(free > 0.1 && ducked < free * 0.2, "con clave {ducked}, sin clave {free}");
+
+        let clips = vec![ClipFrames::whole(0, frames as u64)];
+        let inputs = [
+            MixInput { data: &pad_data, clips: &clips, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &fx, automation: None, sidechain: Some(1) },
+            MixInput { data: &key_data, clips: &clips, gain_db: 0.0, pan: 0.0, mute: true, solo: false, effects: &[], automation: None, sidechain: None },
+        ];
+        let offline = mixdown(&inputs, &MasterSettings::default(), None, RATE);
+        let max_diff = live.iter().zip(&offline.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(max_diff < 1e-5, "diferencia máxima {max_diff}");
     }
 
     #[test]
@@ -1069,7 +1125,7 @@ mod tests {
     }
 
     fn limiter(ceiling_db: f32) -> Vec<EffectSlot> {
-        vec![EffectSlot { plugin: None,
+        vec![EffectSlot { plugin: None, sidechain: None,
             id: "lim".into(),
             enabled: true,
             params: EffectParams::Limiter(mn_fx::LimiterParams { input_db: 0.0, ceiling_db, release_ms: 50.0, true_peak: false }),
