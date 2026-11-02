@@ -29,8 +29,20 @@ QUALITIES: dict[str, dict[int, float]] = {
 # Penalización a los tipos menos comunes para que las tríadas ganen en caso de duda.
 QUALITY_PRIOR = {"": 0.0, "m": 0.0, "7": 0.0, "maj7": 0.0, "m7": 0.0, "dim": 0.06, "sus4": 0.06}
 
-# Tríada básica de cada tipo y acordes diatónicos (intervalo desde la tónica, tríada).
-TRIAD_OF = {"": "maj", "7": "maj", "maj7": "maj", "m": "min", "m7": "min", "dim": "dim", "sus4": "sus"}
+# Tríada básica de cada tipo (incluidos los que solo reconoce BTC) y acordes
+# diatónicos (intervalo desde la tónica, tríada).
+TRIAD_OF = {
+    "": "maj", "7": "maj", "maj7": "maj", "6": "maj", "aug": "aug",
+    "m": "min", "m7": "min", "m6": "min", "mMaj7": "min",
+    "dim": "dim", "dim7": "dim", "m7b5": "dim",
+    "sus4": "sus", "sus2": "sus",
+}  # fmt: skip
+MINOR_QUALITIES = {"m", "m7", "m6", "mMaj7"}
+# Tipos de BTC → los de MusicNova.
+BTC_QUALITY = {
+    "maj": "", "min": "m", "dim": "dim", "aug": "aug", "min6": "m6", "maj6": "6", "min7": "m7",
+    "minmaj7": "mMaj7", "maj7": "maj7", "7": "7", "dim7": "dim7", "hdim7": "m7b5", "sus2": "sus2", "sus4": "sus4",
+}  # fmt: skip
 DIATONIC_MAJOR = {(0, "maj"), (2, "min"), (4, "min"), (5, "maj"), (7, "maj"), (9, "min"), (11, "dim"), (0, "sus"), (7, "sus"), (2, "sus")}
 # Menor natural más la dominante mayor de la armónica.
 DIATONIC_MINOR = {(0, "min"), (2, "dim"), (3, "maj"), (5, "min"), (7, "min"), (7, "maj"), (8, "maj"), (10, "maj"), (11, "dim")}
@@ -165,8 +177,8 @@ def estimate_key(treble: np.ndarray, rms: np.ndarray, chords: list[dict]) -> dic
         for c in chords:
             if c["root"] != tonic or c["quality"] is None:
                 continue
-            is_minor = c["quality"] in ("m", "m7")
-            if is_minor == minor and c["quality"] != "dim":
+            is_minor = c["quality"] in MINOR_QUALITIES
+            if is_minor == minor and TRIAD_OF.get(c["quality"]) in ("maj", "min"):
                 dur += c["end"] - c["start"]
         return dur / total
 
@@ -176,7 +188,7 @@ def estimate_key(treble: np.ndarray, rms: np.ndarray, chords: list[dict]) -> dic
         for c in chords:
             if c["root"] is None:
                 continue
-            if ((c["root"] - tonic) % 12, TRIAD_OF[c["quality"]]) in allowed:
+            if ((c["root"] - tonic) % 12, TRIAD_OF.get(c["quality"], "maj")) in allowed:
                 dur += c["end"] - c["start"]
         return dur / total
 
@@ -199,3 +211,51 @@ def estimate_key(treble: np.ndarray, rms: np.ndarray, chords: list[dict]) -> dic
             for c in candidates[1:4]
         ],
     }
+
+
+def recognize_chords_btc(
+    probs: np.ndarray,
+    frame_seconds: float,
+    beats: np.ndarray,
+    duration: float,
+    stay: float = 0.9,
+) -> list[dict]:
+    """Acordes por pulso a partir de las probabilidades por trama de BTC (tramas ×
+    170): media del logaritmo de la probabilidad en cada pulso y Viterbi con
+    tendencia a mantener el acorde. «X» (acorde desconocido) cuenta como «N»."""
+    import librosa
+
+    from ..vendor import btc
+
+    times = np.concatenate([[0.0], beats[(beats > 0.05) & (beats < duration - 0.05)], [duration]])
+    centers = (np.arange(probs.shape[0]) + 0.5) * frame_seconds
+    logp = np.log(np.maximum(probs, 1e-9))
+    # 168 acordes + N (con X sumada).
+    lp = np.concatenate([logp[:, :168], np.logaddexp(logp[:, btc.X_INDEX], logp[:, btc.N_INDEX])[:, None]], axis=1)
+    segs, bounds = [], []
+    for a, b in zip(times[:-1], times[1:]):
+        idx = np.where((centers >= a) & (centers < b))[0]
+        if len(idx) == 0:
+            idx = np.array([min(probs.shape[0] - 1, int(a / frame_seconds))])
+        segs.append(lp[idx].mean(axis=0))
+        bounds.append((a, b))
+    if not segs:
+        return []
+    seg = np.stack(segs, axis=1)
+    p = np.exp(seg - seg.max(axis=0, keepdims=True))
+    p /= p.sum(axis=0, keepdims=True)
+    path = librosa.sequence.viterbi(p, librosa.sequence.transition_loop(169, stay))
+
+    chords: list[dict] = []
+    for (a, b), s in zip(bounds, path):
+        if s == 168:
+            root, quality, label = None, None, "N"
+        else:
+            r, q = btc.index_to_chord(int(s))
+            root, quality = int(r), BTC_QUALITY[q]
+            label = chord_label(root, quality)
+        if chords and chords[-1]["label"] == label:
+            chords[-1]["end"] = round(float(b), 3)
+        else:
+            chords.append({"start": round(float(a), 3), "end": round(float(b), 3), "label": label, "root": root, "quality": quality})
+    return chords

@@ -1,0 +1,15 @@
+id = "btc_large_voca"
+name = "BTC · Acordes (170 tipos)"
+task = "chords"
+family = "btc"
+description = "Transformador bidireccional para acordes (ISMIR 2019): 14 tipos de acorde (mayor, menor, 7, maj7, m7, dim, aug, 6, m6, mMaj7, dim7, m7♭5, sus2, sus4) sobre las 12 raíces. 12 MB."
+license = "MIT"
+license_url = "https://github.com/jayg996/BTC-ISMIR19"
+commercial_use = true
+priority = 1
+
+[[files]]
+name = "btc_model_large_voca.pt"
+url = "https://github.com/jayg996/BTC-ISMIR19/raw/2682317be668032e6e4b269ded36adaa2ad57df0/test/btc_model_large_voca.pt"
+sha256 = "1673d23f8f9a55ae7f9e8b80a51da616debb22675b8d8b67ea6ce0ef37b0ab51"
+size = 12229576

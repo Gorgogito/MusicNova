@@ -63,6 +63,20 @@ class AnalyzeTask(Task):
         installed.sort(key=lambda m: m.extra.get("priority", 0), reverse=True)
         return installed[0].id if installed else None
 
+    def _chord_model(self, requested: str | None) -> str | None:
+        """Modelo de acordes: BTC si está instalado (o el pedido); None = plantillas y HMM."""
+        if requested == "hmm":
+            return None
+        installed = [m for m in self.models.manifests.values() if m.task == "chords" and self.models.is_installed(m.id)]
+        if requested and requested not in ("auto", "btc"):
+            raise ValueError(f"motor de acordes desconocido: {requested}")
+        if not installed:
+            if requested == "btc":
+                raise ValueError("instala el modelo de acordes BTC en «Modelos»")
+            return None
+        installed.sort(key=lambda m: m.extra.get("priority", 0), reverse=True)
+        return installed[0].id
+
     def run(self, params: dict[str, Any], job: Job) -> dict[str, Any]:
         import numpy as np
 
@@ -126,7 +140,19 @@ class AnalyzeTask(Task):
         treble, bass, rms = harmony.chroma_features(y_harm, y_bass)
         job.check()
         report(0.65, "reconociendo acordes")
-        chords = harmony.recognize_chords(treble, bass, rms, beats, duration)
+        chord_model = self._chord_model(params.get("chord_engine"))
+        if chord_model:
+            # BTC se entrenó con mezclas completas: se le da la mezcla.
+            from ..vendor import btc
+
+            manifest = self.models.get(chord_model)
+            model, mean, std = btc.load(self.models.model_dir(chord_model) / manifest.files[0].name, device)
+            probs = btc.predict_probs(model, mean, std, y, device)
+            del model
+            chords = harmony.recognize_chords_btc(probs, btc.FRAME_SECONDS, beats, duration)
+            chord_source = "btc"
+        else:
+            chords = harmony.recognize_chords(treble, bass, rms, beats, duration)
         report(0.75, "estimando tonalidad")
         key = harmony.estimate_key(treble, rms, chords)
         job.check()

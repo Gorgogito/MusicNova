@@ -7,8 +7,10 @@ Ninguno se redistribuye con MusicNova: solo se usan para medir.
 - IRMAS, partición de prueba (CC BY-NC-SA 3.0): se bajan las etiquetas y una
   muestra de ~160 fragmentos (hasta 30 por instrumento) con peticiones por
   rangos, sin descargar los 7,8 GB de los zip.
+- GuitarSet (CC BY 4.0): anotaciones y 60 acompañamientos grabados con
+  micrófono (uno de cada tres), por rangos.
 
-uso: python fetch.py [vocadito] [mdb] [irmas]
+uso: python fetch.py [vocadito] [mdb] [irmas] [guitarset]
 """
 import collections
 import io
@@ -103,7 +105,27 @@ def irmas():
                 print("ok", wav, flush=True)
 
 
+def guitarset():
+    dest = os.path.join(DATA, "guitarset")
+    os.makedirs(os.path.join(dest, "audio"), exist_ok=True)
+    if not os.path.isdir(os.path.join(dest, "ann")):
+        data = urllib.request.urlopen("https://zenodo.org/records/3371780/files/annotation.zip?download=1").read()
+        zipfile.ZipFile(io.BytesIO(data)).extractall(os.path.join(dest, "ann"))
+    url = "https://zenodo.org/records/3371780/files/audio_mono-mic.zip?download=1"
+    z = zipfile.ZipFile(io.BufferedReader(remotezip.RangeFile(url), buffer_size=1 << 14))
+    comp = sorted(i.filename for i in z.infolist() if "_comp_" in i.filename)
+    for k, name in enumerate(comp):
+        if k % 3:
+            continue
+        out = os.path.join(dest, "audio", os.path.basename(name))
+        if not os.path.exists(out):
+            with open(out + ".part", "wb") as f:
+                f.write(z.read(name))
+            os.replace(out + ".part", out)
+            print("ok", name, flush=True)
+
+
 if __name__ == "__main__":
-    which = sys.argv[1:] or ["vocadito", "mdb", "irmas"]
+    which = sys.argv[1:] or ["vocadito", "mdb", "irmas", "guitarset"]
     for w in which:
-        {"vocadito": vocadito, "mdb": mdb, "irmas": irmas}[w]()
+        {"vocadito": vocadito, "mdb": mdb, "irmas": irmas, "guitarset": guitarset}[w]()

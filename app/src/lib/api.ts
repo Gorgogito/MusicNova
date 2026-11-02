@@ -236,7 +236,7 @@ export interface Analysis {
   version: number
   duration: number
   beat_source: string
-  chord_source: 'stems' | 'mix'
+  chord_source: 'stems' | 'mix' | 'btc'
   bpm: number
   tempo_stable: boolean
   tempo_curve: [number, number][]

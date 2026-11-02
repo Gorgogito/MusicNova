@@ -28,6 +28,7 @@ export function AnalysisPanel(props: Props) {
   const [beatModel, setBeatModel] = useState('')
   const [device, setDevice] = useState('auto')
   const [showSetup, setShowSetup] = useState(false)
+  const [hasBtc, setHasBtc] = useState(true)
 
   useEffect(() => {
     if (!workerReady) return
@@ -38,6 +39,7 @@ export function AnalysisPanel(props: Props) {
           .filter((m) => m.task === 'beats' && m.installed)
           .sort((a, b) => Number(b.priority ?? 0) - Number(a.priority ?? 0))
         setModels(installed)
+        setHasBtc(r.models.some((m) => m.task === 'chords' && m.installed))
         setBeatModel((cur) => (installed.some((m) => m.id === cur) ? cur : (installed[0]?.id ?? 'none')))
       })
       .catch((e) => props.onError(errorMessage(e)))
@@ -92,12 +94,20 @@ export function AnalysisPanel(props: Props) {
       <div className="panel">
         {!workerReady && <span className="muted">El proceso de IA se está iniciando…</span>}
         <p className="small muted">
-          Detecta pulsos, compás, tempo, tonalidad, acordes y secciones. Con stems separados los acordes son más
-          precisos porque se analizan sin batería ni voz.
+          Detecta pulsos, compás, tempo, tonalidad, acordes y secciones.
         </p>
         {models && models.length === 0 && (
           <div className="notice small">
             Para pulsos y compases precisos descarga <strong>Beat This!</strong> (MIT, 8–80 MB).{' '}
+            <button className="link small" onClick={props.onOpenModels}>
+              Ver modelos
+            </button>
+          </div>
+        )}
+        {!hasBtc && (
+          <div className="notice small">
+            Para acordes más precisos (14 tipos: 7, maj7, m7♭5, dim7, sus2, 6…) descarga <strong>BTC</strong> (MIT, 12 MB):
+            con guitarra real acierta el tipo de acorde un 62 % del tiempo frente al 41 % sin él.{' '}
             <button className="link small" onClick={props.onOpenModels}>
               Ver modelos
             </button>
@@ -226,7 +236,7 @@ export function AnalysisPanel(props: Props) {
             : 'Doble clic en un acorde o sección de la línea de tiempo para corregirlo.'}
         </span>
         <span className="small muted">
-          Fuente: {analysis.chord_source === 'stems' ? 'stems (sin batería ni voz)' : 'mezcla completa'} · pulsos:{' '}
+          Acordes: {analysis.chord_source === 'btc' ? 'red neuronal BTC (mezcla completa)' : analysis.chord_source === 'stems' ? 'plantillas sobre los stems (sin batería ni voz)' : 'plantillas sobre la mezcla'} · pulsos:{' '}
           {analysis.beat_source === 'librosa' ? 'básico' : analysis.beat_source}
         </span>
         <button className="link small" onClick={() => setShowSetup(true)}>

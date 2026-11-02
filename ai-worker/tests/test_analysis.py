@@ -170,6 +170,7 @@ def test_analyze_task_end_to_end(song, tmp_path, beat_model):
             "input": str(tmp_path / "mix.wav"),
             "stems": {"other": str(tmp_path / "other.flac"), "bass": str(tmp_path / "bass.flac")},
             "beat_model_id": beat_model,
+            "chord_engine": "hmm",
             "output": str(out),
         },
         Job("t", "analyze", lambda e, d: events.append(d)),
@@ -205,3 +206,41 @@ def test_seventh_chords_detected():
     got = [next(c for c in chords if c["start"] <= (i + 0.5) * BAR < c["end"]) for i in range(8)]
     expected = [(v[0], v[2]) for v in voicings] * 2
     assert [(c["root"], c["quality"]) for c in got] == expected, [c["label"] for c in got]
+
+
+def test_btc_decoding_follows_beats():
+    """Probabilidades por trama → un acorde por pulso, con «X» sumada a «N»."""
+    from musicnova_ai.analysis import harmony
+    from musicnova_ai.vendor import btc
+
+    fs = btc.FRAME_SECONDS
+    n = int(8 / fs)
+    probs = np.full((n, 170), 1e-4)
+    t = (np.arange(n) + 0.5) * fs
+    # 0–4 s: Do mayor (índice 0·14+1); 4–6 s: Si m7♭5 (11·14+11); 6–8 s: desconocido (X).
+    probs[t < 4, 0 * 14 + 1] = 1.0
+    probs[(t >= 4) & (t < 6), 11 * 14 + 11] = 1.0
+    probs[t >= 6, btc.X_INDEX] = 1.0
+    probs /= probs.sum(axis=1, keepdims=True)
+    beats = np.arange(0.5, 8, 0.5)
+    chords = harmony.recognize_chords_btc(probs, fs, beats, 8.0)
+    assert [(c["label"], c["start"], c["end"]) for c in chords] == [("C", 0.0, 4.0), ("Bm7b5", 4.0, 6.0), ("N", 6.0, 8.0)]
+    assert chords[1]["root"] == 11 and chords[1]["quality"] == "m7b5"
+
+
+def test_analyze_with_btc(song, tmp_path):
+    import soundfile as sf
+
+    from musicnova_ai.jobs import Job
+    from musicnova_ai.models import ModelManager
+    from musicnova_ai.tasks.analysis import AnalyzeTask
+
+    mm = ModelManager()
+    if not mm.is_installed("btc_large_voca"):
+        pytest.skip("BTC no está instalado")
+    mix, _, _ = song
+    sf.write(tmp_path / "mix.wav", np.stack([mix, mix], axis=1), SR, subtype="FLOAT")
+    res = AnalyzeTask(mm).run({"input": str(tmp_path / "mix.wav"), "beat_model_id": "none", "chord_engine": "btc", "device": "cpu"}, Job("t", "analyze", lambda *a: None))
+    assert res["chord_source"] == "btc"
+    assert chord_accuracy(res["chords"], FORM) >= 0.85, res["chords"][:8]
+    assert res["key"]["label"] == "C"

@@ -4,6 +4,23 @@ Medidas de la fase 6 con conjuntos de datos públicos anotados a mano. Los datos
 no se incluyen en el repositorio; `ai-worker/eval/fetch.py` los descarga y los
 scripts de `ai-worker/eval/` reproducen cada tabla (ver el final).
 
+## Acordes (análisis)
+
+GuitarSet: 47 acompañamientos de guitarra real (6 guitarristas, 5 estilos) frente
+a la progresión de la partitura anotada, por tramas de 10 ms
+(`eval/chords_guitarset.py`).
+
+| Motor | Raíz | Mayor/menor | Tipo exacto (mayor, menor, 7, m7♭5) |
+|---|---|---|---|
+| Plantillas de croma + HMM (sin modelo) | 74,0 % | 61,5 % | 40,5 % |
+| **BTC, vocabulario amplio (el predeterminado si está instalado)** | **82,0 %** | **72,4 %** | **61,9 %** |
+
+BTC (Park et al., ISMIR 2019; MIT) reconoce 14 tipos sobre las 12 raíces. Sus
+probabilidades por trama (93 ms) se promedian en cada pulso y se suavizan con
+Viterbi, así que los cambios de acorde caen en los pulsos. Los pesos se cargan
+sin ejecutar código del archivo (`weights_only` con solo escalares de numpy
+permitidos).
+
 ## Tono de la voz (afinación vocal)
 
 Vocadito: 40 voces solistas reales (817 s) con f0 anotada. RPA = porcentaje de

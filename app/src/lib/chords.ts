@@ -1,6 +1,6 @@
 // Teoría de acordes para la interfaz: nombres, transposición y digitaciones.
 // Los tipos de acorde coinciden con los que reconoce el proceso de IA
-// (ai-worker/musicnova_ai/analysis/harmony.py).
+// (ai-worker/musicnova_ai/analysis/harmony.py): 7 con las plantillas y 14 con BTC.
 
 export type Notation = 'english' | 'latin'
 
@@ -18,9 +18,31 @@ export const QUALITY_INTERVALS: Record<string, number[]> = {
   m7: [0, 3, 7, 10],
   dim: [0, 3, 6],
   sus4: [0, 5, 7],
+  sus2: [0, 2, 7],
+  aug: [0, 4, 8],
+  '6': [0, 4, 7, 9],
+  m6: [0, 3, 7, 9],
+  mMaj7: [0, 3, 7, 11],
+  dim7: [0, 3, 6, 9],
+  m7b5: [0, 3, 6, 10],
 }
 
-const QUALITY_SUFFIX: Record<string, string> = { '': '', m: 'm', '7': '7', maj7: 'maj7', m7: 'm7', dim: '°', sus4: 'sus4' }
+const QUALITY_SUFFIX: Record<string, string> = {
+  '': '',
+  m: 'm',
+  '7': '7',
+  maj7: 'maj7',
+  m7: 'm7',
+  dim: '°',
+  sus4: 'sus4',
+  sus2: 'sus2',
+  aug: '+',
+  '6': '6',
+  m6: 'm6',
+  mMaj7: 'm(maj7)',
+  dim7: '°7',
+  m7b5: 'm7♭5',
+}
 
 export const mod12 = (n: number) => ((n % 12) + 12) % 12
 
@@ -103,6 +125,13 @@ const E_SHAPE: Record<string, number[]> = {
   m7: [0, 2, 0, 0, 0, 0],
   dim: [0, 1, 2, 0, -1, -1],
   sus4: [0, 2, 2, 2, 0, 0],
+  sus2: [0, 2, 4, 4, 0, 0],
+  aug: [0, 3, 2, 1, 1, 0],
+  '6': [0, 2, 2, 1, 2, 0],
+  m6: [0, 2, 2, 0, 2, 0],
+  mMaj7: [0, 2, 1, 0, 0, 0],
+  dim7: [0, 1, 2, 0, 2, 0],
+  m7b5: [0, 1, 0, 0, 3, -1],
 }
 const A_SHAPE: Record<string, number[]> = {
   '': [-1, 0, 2, 2, 2, 0],
@@ -112,6 +141,13 @@ const A_SHAPE: Record<string, number[]> = {
   m7: [-1, 0, 2, 0, 1, 0],
   dim: [-1, 0, 1, 2, 1, -1],
   sus4: [-1, 0, 2, 2, 3, 0],
+  sus2: [-1, 0, 2, 2, 0, 0],
+  aug: [-1, 0, 3, 2, 2, 1],
+  '6': [-1, 0, 2, 2, 2, 2],
+  m6: [-1, 0, 2, 2, 1, 2],
+  mMaj7: [-1, 0, 2, 1, 1, 0],
+  dim7: [-1, 0, 1, 2, 1, 2],
+  m7b5: [-1, 0, 1, 0, 1, -1],
 }
 
 const movable = (offsets: number[], fret: number) => offsets.map((o) => (o < 0 ? -1 : fret + o))
@@ -154,6 +190,9 @@ const EN_ROOTS: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b
 const QUALITY_ALIASES: Record<string, string> = {
   '': '', maj: '', m: 'm', min: 'm', '-': 'm', '7': '7', dom7: '7', maj7: 'maj7', M7: 'maj7', 'Δ': 'maj7',
   m7: 'm7', min7: 'm7', '-7': 'm7', dim: 'dim', '°': 'dim', o: 'dim', sus4: 'sus4', sus: 'sus4',
+  sus2: 'sus2', aug: 'aug', '+': 'aug', '6': '6', maj6: '6', m6: 'm6', min6: 'm6', mmaj7: 'mMaj7', mMaj7: 'mMaj7',
+  'm(maj7)': 'mMaj7', minmaj7: 'mMaj7', dim7: 'dim7', '°7': 'dim7', o7: 'dim7', m7b5: 'm7b5', 'm7♭5': 'm7b5', ø: 'm7b5',
+  ø7: 'm7b5', hdim7: 'm7b5',
 }
 
 /** Interpreta un acorde escrito ("Am7", "Lam7", "F#", "Sib", "N"). `null` si no se entiende. */

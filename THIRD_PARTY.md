@@ -12,6 +12,7 @@ compatibles.
 | Basic Pitch (inferencia y creación de notas, adaptadas) y su modelo ONNX ICASSP 2022 (`nmp.onnx`) | `ai-worker/musicnova_ai/vendor/basic_pitch/` | Apache-2.0 | spotify/basic-pitch, commit `fa5997af` (cambios descritos en el archivo) |
 | Arquitectura Cnn10/Cnn14 de PANNs (reescrita con log-mel en torch) | `ai-worker/musicnova_ai/vendor/panns/` | MIT | qiuqiangkong/audioset_tagging_cnn |
 | Lista de clases de AudioSet (`class_labels_indices.csv`) | `ai-worker/musicnova_ai/vendor/panns/` | CC BY 4.0 | Google AudioSet, vía audioset_tagging_cnn |
+| BTC (modelo de acordes de vocabulario amplio, solo inferencia) | `ai-worker/musicnova_ai/vendor/btc/` | MIT | jayg996/BTC-ISMIR19, commit `2682317b` |
 | DeepFilterNet3: procesado de señal portado a numpy (STFT Vorbis, bandas ERB, normalización, máscara y filtrado profundo) | `ai-worker/musicnova_ai/vendor/deepfilternet/` | MIT o Apache-2.0 | Rikorose/DeepFilterNet (libDF, `deepfilternet3.py`, `multiframe.py`), commit `84d57ec2` |
 | Signalsmith Stretch y Signalsmith Linear (cabeceras C++) | `crates/mn-stretch/vendor/` | MIT | Signalsmith Audio, vía signalsmith-stretch-rs 0.1.3 |
 | Envoltura C de Signalsmith Stretch (con `set_formant_base` corregido) | `crates/mn-stretch/vendor/wrapper/` | MIT | Colin Marc (signalsmith-stretch-rs) |
@@ -55,6 +56,7 @@ Cada una se verifica con SHA-256 y la app muestra su licencia antes de descargar
 | Beat This! final0 y small0 (CPJKU, JKU Linz) | MIT (código y pesos) | cloud.cp.jku.at |
 | Whisper large-v3, large-v3 turbo y small (OpenAI) en formato CTranslate2 | MIT | huggingface.co/Systran, huggingface.co/deepdml |
 | PANNs Cnn14 y Cnn10 (Kong et al., 2020) | CC BY 4.0 (pesos) | zenodo.org/records/3987831 |
+| BTC, vocabulario amplio (`btc_model_large_voca.pt`) | MIT | github.com/jayg996/BTC-ISMIR19 (commit `2682317b`) |
 | DeepFilterNet3 (grafos ONNX) | MIT o Apache-2.0 | github.com/Rikorose/DeepFilterNet (commit `84d57ec2`) |
 | ACE-Step 1.5 base (DiT), VAE | MIT | huggingface.co/ACE-Step/acestep-v15-base, huggingface.co/ACE-Step/Ace-Step1.5 |
 | Qwen3-Embedding-0.6B (codificador de texto de ACE-Step) | Apache-2.0 | huggingface.co/ACE-Step/Ace-Step1.5 (Alibaba Qwen) |
@@ -69,3 +71,4 @@ medidas de `docs/TRANSCRIPCION.md`.
 | Vocadito (voces solistas con f0 y notas anotadas) | CC BY 4.0 | zenodo.org/records/5578807 |
 | MDB Drums (batería de 23 canciones de MedleyDB, golpes anotados) | CC BY-NC-SA 4.0 | github.com/CarlSouthall/MDBDrums |
 | IRMAS, partición de prueba (instrumentos predominantes anotados) | CC BY-NC-SA 3.0 | zenodo.org/records/1290750 |
+| GuitarSet (guitarra real con acordes anotados) | CC BY 4.0 | zenodo.org/records/3371780 |
