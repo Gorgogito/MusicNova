@@ -602,6 +602,7 @@ export const api = {
   pluginOpenEditor: (slotId: string) => invoke<void>('plugin_open_editor', { slotId }),
   pluginParams: (slotId: string) => invoke<PluginParam[]>('plugin_params', { slotId }),
   pluginParamSet: (slotId: string, id: number, value: number) => invoke<void>('plugin_param_set', { slotId, id, value }),
+  pluginRestart: (slotId: string) => invoke<void>('plugin_restart', { slotId }),
   pluginsSync: () => invoke<void>('plugins_sync'),
   automationSet: (trackId: string | null, lanes: AutomationLane[]) =>
     invoke<AutomationLane[]>('automation_set', { trackId, lanes }),
@@ -618,6 +619,9 @@ export const events = {
     listen<{ done: number; total: number; current: string }>('plugin-scan', (e) => cb(e.payload)),
   recordFinished: (cb: (r: RecordFinished) => void): Promise<UnlistenFn> =>
     listen<RecordFinished>('record-finished', (e) => cb(e.payload)),
+  /** El plugin de un efecto se cayó o dejó de responder (su proceso terminó). */
+  pluginFailed: (cb: (e: { slot_id: string; message: string }) => void): Promise<UnlistenFn> =>
+    listen<{ slot_id: string; message: string }>('plugin-failed', (e) => cb(e.payload)),
 }
 
 /** Final de la línea de tiempo: el clip que acaba más tarde. */

@@ -6,5 +6,9 @@ fn main() {
     if musicnova_lib::scan_subprocess_main() {
         return;
     }
+    // `--plugin-host`: proceso que aloja un plugin (uno por efecto o instrumento).
+    if mn_plugin::host_main() {
+        return;
+    }
     musicnova_lib::run()
 }

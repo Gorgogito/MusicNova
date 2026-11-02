@@ -2309,6 +2309,7 @@ dependencies = [
  "mn-fx",
  "rtrb",
  "serde",
+ "serde_json",
  "vst3",
  "windows-sys 0.59.0",
 ]

@@ -253,6 +253,21 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
     Ok(view)
 }
 
+/// Vuelve a cargar el plugin del efecto `slot_id` (tras caerse) reconstruyendo
+/// la cadena de su canal; usa el último estado guardado en el proyecto.
+pub(crate) fn restart_plugin(state: &AppState, slot_id: &str) -> Result<(), String> {
+    let engine = state.engine()?;
+    let s = state.session.lock().unwrap();
+    let project = s.project.as_ref().ok_or("no hay ningún proyecto abierto")?;
+    let has = |effects: &[EffectSlot]| effects.iter().any(|e| e.id == slot_id);
+    if has(&project.master.effects) {
+        return engine.set_effects(None, &project.master.effects).map_err(err);
+    }
+    let track = project.tracks.iter().find(|t| has(&t.effects)).ok_or("efecto desconocido")?;
+    let id = *s.engine_ids.get(&track.id).ok_or("pista desconocida")?;
+    engine.set_effects(Some(id), &track.effects).map_err(err)
+}
+
 /// Efectos con plugin externo de todo el proyecto (pistas y máster).
 fn plugin_slot_ids(project: &Project) -> Vec<String> {
     project
@@ -1497,7 +1512,16 @@ pub fn run() {
                 eprintln!("[musicnova] {e}");
             }
             app.manage(AppState { engine, engine_error, session: Mutex::new(Session::default()), worker, projects_root });
-            // Plugins: las llamadas de «hilo principal» van al bucle de la ventana.
+            // Plugins: cada uno en su propio proceso (la app relanzada con
+            // `--plugin-host`), salvo que se pida lo contrario para depurar.
+            #[cfg(windows)]
+            if std::env::var_os("MUSICNOVA_PLUGINS_INPROCESS").is_none() {
+                if let Ok(exe) = std::env::current_exe() {
+                    mn_plugin::set_host_command(exe, vec![mn_plugin::HOST_FLAG.to_string()]);
+                }
+            }
+            plugins::on_plugin_failed(app.handle().clone());
+            // Plugins en el proceso: las llamadas de «hilo principal» van al bucle de la ventana.
             let handle = app.handle().clone();
             mn_plugin::set_main_thread_executor(move |f| {
                 let _ = handle.run_on_main_thread(f);
@@ -1556,6 +1580,7 @@ pub fn run() {
             plugins::plugin_open_editor,
             plugins::plugin_params,
             plugins::plugin_param_set,
+            plugins::plugin_restart,
             plugins::plugins_sync,
             transcribe::notes_start,
             transcribe::notes_apply,

@@ -1,10 +1,15 @@
 //! Alojamiento de plugins de audio CLAP y VST3 para MusicNova.
 //!
-//! Los plugins se cargan en el propio proceso (como en la mayoría de DAW); el
-//! escaneo, que es lo más arriesgado, se hace en un proceso aparte (la
-//! aplicación se relanza con `--scan-plugin`). Cada formato implementa
-//! [`Backend`]; [`Instance`] añade lo común: cola de cambios de parámetros sin
-//! bloqueos, ventana del editor y apagado ordenado.
+//! Cada formato implementa [`Backend`]; [`Instance`] añade lo común: cola de
+//! cambios de parámetros sin bloqueos, ventana del editor y apagado ordenado.
+//!
+//! Aislamiento: con [`set_host_command`] cada plugin corre en su propio proceso
+//! anfitrión ([`host_main`], la aplicación relanzada con `--plugin-host`); la
+//! aplicación habla con él mediante `remote` (órdenes por tuberías y audio por
+//! memoria compartida). Si un plugin se cae o se cuelga, su efecto pasa el audio
+//! sin procesar, se avisa con [`on_plugin_failed`] y la aplicación sigue. Sin
+//! anfitrión configurado (pruebas, el propio anfitrión) se cargan en el proceso.
+//! El escaneo también se hace en un proceso aparte (`--scan-plugin`).
 //!
 //! Hilos: las funciones que los estándares reservan al hilo principal (crear,
 //! activar, estado, parámetros, interfaz, destruir) se ejecutan en el hilo que
@@ -12,10 +17,25 @@
 //! El proceso de audio corre en el hilo del motor o en el de exportación.
 
 mod clap;
+#[cfg(windows)]
+mod host;
+#[cfg(windows)]
+mod ipc;
+#[cfg(windows)]
+mod remote;
 mod scan;
 mod vst3;
 #[cfg(windows)]
 mod window;
+
+#[cfg(windows)]
+pub use host::{host_main, HOST_FLAG};
+
+/// Sin anfitrión fuera de Windows: nunca es el modo anfitrión.
+#[cfg(not(windows))]
+pub fn host_main() -> bool {
+    false
+}
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -88,7 +108,7 @@ impl PluginDescriptor {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ParamInfo {
     pub id: u32,
     pub name: String,
@@ -140,6 +160,26 @@ pub(crate) trait Backend: Send + Sync {
     }
     /// Principal: detiene, desactiva y destruye el plugin.
     fn shutdown(&self);
+
+    /// `false`: las llamadas «principal» pueden hacerse desde cualquier hilo
+    /// (el plugin corre en otro proceso, con su propio hilo principal).
+    fn needs_main_thread(&self) -> bool {
+        true
+    }
+    /// Plugin en otro proceso: su interfaz se abre allí (`None`: aquí).
+    fn external_editor_open(&self) -> Option<Result<(), String>> {
+        None
+    }
+    fn external_editor_close(&self) {}
+    fn external_editor_is_open(&self) -> Option<bool> {
+        None
+    }
+    /// Por qué el plugin ya no funciona (se cayó o se colgó), si es el caso.
+    fn failure(&self) -> Option<String> {
+        None
+    }
+    /// Efecto del proyecto al que sirve (para los avisos).
+    fn attach_slot(&self, _slot: &str) {}
 }
 
 // ---- Hilo principal ---------------------------------------------------------------
@@ -186,6 +226,15 @@ pub(crate) fn on_main<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static)
     }
 }
 
+/// Ejecuta `f` en el hilo principal si el plugin lo necesita; si no, aquí.
+fn run_for<R: Send + 'static>(b: &Arc<dyn Backend>, f: impl FnOnce() -> R + Send + 'static) -> R {
+    if b.needs_main_thread() {
+        on_main(f)
+    } else {
+        f()
+    }
+}
+
 /// Ejecuta `f` en el hilo principal sin esperar.
 pub(crate) fn on_main_async(f: impl FnOnce() + Send + 'static) {
     match MAIN.get() {
@@ -213,7 +262,25 @@ pub struct Instance {
 
 impl Instance {
     /// Carga el plugin, lo activa a `sample_rate` y restaura su estado guardado.
+    /// Instancia para procesar sin conexión (exportar, generar).
     pub fn load(plugin: &PluginRef, sample_rate: u32) -> Result<Arc<Instance>, String> {
+        Self::load_with(plugin, sample_rate, false)
+    }
+
+    /// Como [`Instance::load`]; `realtime` indica que procesará en el motor (en
+    /// otro proceso, un bloque que tarda demasiado pasa sin procesar en vez de esperar).
+    pub fn load_with(plugin: &PluginRef, sample_rate: u32, realtime: bool) -> Result<Arc<Instance>, String> {
+        #[cfg(windows)]
+        if let Some(cmd) = HOST.get() {
+            let backend: Arc<dyn Backend> = Arc::new(remote::RemoteBackend::spawn(cmd, plugin, sample_rate, realtime)?);
+            return Ok(Self::wrap(plugin, sample_rate, backend));
+        }
+        let _ = realtime;
+        Self::load_local(plugin, sample_rate)
+    }
+
+    /// Carga el plugin en este proceso.
+    pub(crate) fn load_local(plugin: &PluginRef, sample_rate: u32) -> Result<Arc<Instance>, String> {
         let format = PluginFormat::parse(&plugin.format).ok_or_else(|| format!("formato desconocido: {}", plugin.format))?;
         let state = match plugin.state.as_deref() {
             Some(s) => Some(
@@ -234,12 +301,16 @@ impl Instance {
                 eprintln!("[mn-plugin] {} no aceptó su estado guardado", plugin.name);
             }
         }
+        Ok(Self::wrap(plugin, sample_rate, backend))
+    }
+
+    fn wrap(plugin: &PluginRef, sample_rate: u32, backend: Arc<dyn Backend>) -> Arc<Instance> {
         let latency = {
             let b = backend.clone();
-            on_main(move || b.latency())
+            run_for(&backend, move || b.latency())
         };
         let (tx, rx) = rtrb::RingBuffer::new(1024);
-        Ok(Arc::new(Instance {
+        Arc::new(Instance {
             plugin: plugin.clone(),
             sample_rate,
             slot_id: None,
@@ -249,11 +320,29 @@ impl Instance {
             queue_rx: Mutex::new(rx),
             #[cfg(windows)]
             editor: Mutex::new(None),
-        }))
+        })
     }
 
     fn backend(&self) -> Arc<dyn Backend> {
         self.backend.clone().expect("instancia apagada")
+    }
+
+    /// Ejecuta `f` con el plugin en el hilo que le corresponde.
+    fn call<R: Send + 'static>(&self, f: impl FnOnce(&dyn Backend) -> R + Send + 'static) -> R {
+        let b = self.backend();
+        let b2 = b.clone();
+        run_for(&b, move || f(&*b2))
+    }
+
+    /// Por qué el plugin ya no funciona (se cayó o dejó de responder). Su efecto
+    /// pasa el audio sin procesar; al reconstruir la cadena se vuelve a cargar.
+    pub fn failure(&self) -> Option<String> {
+        self.backend.as_ref().and_then(|b| b.failure())
+    }
+
+    /// Si corre en su propio proceso.
+    pub fn isolated(&self) -> bool {
+        self.backend.as_ref().is_some_and(|b| !b.needs_main_thread())
     }
 
     fn same_plugin(&self, r: &PluginRef) -> bool {
@@ -261,25 +350,28 @@ impl Instance {
     }
 
     pub fn params(&self) -> Vec<ParamInfo> {
-        let b = self.backend();
-        on_main(move || b.params())
+        self.call(|b| b.params())
     }
 
     /// Cambia un parámetro; llega al plugin en el siguiente bloque de audio.
     pub fn set_param(&self, id: u32, value: f64) {
-        let b = self.backend();
-        on_main(move || b.param_set_from_host(id, value));
+        self.call(move |b| b.param_set_from_host(id, value));
         let _ = self.queue_tx.lock().unwrap().push((id, value));
     }
 
     /// Estado actual del plugin (base64), para guardarlo en el proyecto.
     pub fn state_base64(&self) -> Option<String> {
-        let b = self.backend();
-        on_main(move || b.save_state()).map(|d| base64::engine::general_purpose::STANDARD.encode(d))
+        self.call(|b| b.save_state()).map(|d| base64::engine::general_purpose::STANDARD.encode(d))
     }
 
     /// Abre la interfaz nativa en su propia ventana (o la trae al frente).
     pub fn open_editor(self: &Arc<Self>) -> Result<(), String> {
+        if let Some(e) = self.failure() {
+            return Err(e);
+        }
+        if let Some(r) = self.backend().external_editor_open() {
+            return r;
+        }
         #[cfg(windows)]
         {
             let me = self.clone();
@@ -290,6 +382,10 @@ impl Instance {
     }
 
     pub fn close_editor(&self) {
+        if let Some(b) = self.backend.as_ref().filter(|b| !b.needs_main_thread()) {
+            b.external_editor_close();
+            return;
+        }
         #[cfg(windows)]
         if let Some(e) = self.editor.lock().unwrap().take() {
             let b = self.backend();
@@ -301,6 +397,9 @@ impl Instance {
     }
 
     pub fn editor_open(&self) -> bool {
+        if let Some(open) = self.backend.as_ref().and_then(|b| b.external_editor_is_open()) {
+            return open;
+        }
         #[cfg(windows)]
         return self.editor.lock().unwrap().is_some();
         #[cfg(not(windows))]
@@ -313,6 +412,11 @@ impl Drop for Instance {
         #[cfg(windows)]
         let editor = self.editor.get_mut().unwrap().take();
         if let Some(b) = self.backend.take() {
+            if !b.needs_main_thread() {
+                // En otro proceso: se le pide que termine sin bloquear a nadie.
+                std::thread::spawn(move || b.shutdown());
+                return;
+            }
             // Sin esperar: quien suelta la última referencia puede ser un hilo
             // que el principal está esperando.
             on_main_async(move || {
@@ -463,6 +567,9 @@ pub fn render_instrument(plugin: &PluginRef, notes: &[RenderNote], sample_rate: 
     }
     IN_AUDIO.with(|f| f.set(false));
     drop(backend);
+    if let Some(e) = inst.failure() {
+        return Err(e);
+    }
     drop(inst);
     Ok(out)
 }
@@ -511,13 +618,15 @@ fn factory(slot: &EffectSlot, sample_rate: u32, realtime: bool) -> Option<Box<dy
     let r = slot.plugin.as_ref()?;
     if realtime {
         if let Some(inst) = instance(&slot.id) {
-            if inst.same_plugin(r) && inst.sample_rate == sample_rate {
+            // Un plugin caído se vuelve a cargar (con el último estado guardado).
+            if inst.same_plugin(r) && inst.sample_rate == sample_rate && inst.failure().is_none() {
                 return Some(Box::new(PluginProcessor::new(inst)));
             }
         }
     }
-    match Instance::load(r, sample_rate) {
+    match Instance::load_with(r, sample_rate, realtime) {
         Ok(mut inst) => {
+            inst.backend().attach_slot(&slot.id);
             if realtime {
                 Arc::get_mut(&mut inst).expect("instancia recién creada").slot_id = Some(slot.id.clone());
                 if let Some(old) = live().lock().unwrap().insert(slot.id.clone(), inst.clone()) {
@@ -552,6 +661,43 @@ pub(crate) fn notify_editor_closed(slot_id: Option<&str>) {
     if let (Some(cb), Some(id)) = (EDITOR_CLOSED.get(), slot_id) {
         cb(id);
     }
+}
+
+/// Aviso de que el plugin de un efecto se cayó o dejó de responder (id del
+/// efecto y mensaje). Llega desde un hilo propio del alojamiento.
+type FailedCallback = Box<dyn Fn(&str, &str) + Send + Sync>;
+static PLUGIN_FAILED: OnceLock<FailedCallback> = OnceLock::new();
+
+pub fn on_plugin_failed(f: impl Fn(&str, &str) + Send + Sync + 'static) {
+    let _ = PLUGIN_FAILED.set(Box::new(f));
+}
+
+#[cfg(windows)]
+pub(crate) fn notify_failed(slot_id: &str, message: &str) {
+    if let Some(cb) = PLUGIN_FAILED.get() {
+        cb(slot_id, message);
+    }
+}
+
+/// Anfitrión con el que aislar cada plugin en su propio proceso.
+#[cfg(windows)]
+static HOST: OnceLock<remote::HostCommand> = OnceLock::new();
+
+/// Activa el aislamiento: cada plugin se cargará en un proceso lanzado como
+/// `exe args…` (que debe llamar a [`host_main`]). Llamar una vez, al arrancar.
+pub fn set_host_command(exe: PathBuf, args: Vec<String>) {
+    #[cfg(windows)]
+    let _ = HOST.set(remote::HostCommand { exe, args });
+    #[cfg(not(windows))]
+    let _ = (exe, args);
+}
+
+/// Si los plugins se cargan en procesos aparte.
+pub fn isolation_enabled() -> bool {
+    #[cfg(windows)]
+    return HOST.get().is_some();
+    #[cfg(not(windows))]
+    false
 }
 
 /// Ventana de la aplicación que hace de dueña de las ventanas de plugins.

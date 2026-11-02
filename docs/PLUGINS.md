@@ -42,7 +42,7 @@ Windows estaba procesando, vuelca su pila con `dbghelp` y termina con código 3.
 | Surge XT 1.3.4 (sintetizador) | GPL-3.0 | ✔ | ✔ | Como instrumento en pistas de instrumento: un acorde de Do da picos en 261/330/392 Hz y un La3 en 220 Hz; el cambio desde la interfaz regenera la pista en la nota correcta. |
 | Airwindows Consolidated (2026-10-31) | MIT | ✔ | ✔ | Todas. Al cambiar de efecto desde su interfaz cambia la lista de parámetros; se refleja y se guarda. |
 | Dragonfly Hall / Plate / Room Reverb 3.2.10 | GPL-3.0 | ✔ | ✔ | Todas, incluido el arrastre en la interfaz. |
-| Dragonfly Early Reflections 3.2.10 | GPL-3.0 | ✔* | ✔* | *El audio, los parámetros y el estado funcionan, pero su interfaz bloquea el hilo principal (el driver OpenGL espera un sincronismo vertical que no llega). Es un fallo conocido del plugin ([dragonfly-reverb#169](https://github.com/michaelwillis/dragonfly-reverb/issues/169)): también congela REAPER, Audacity, Ableton y Reason. No abras su interfaz; usa los parámetros genéricos. |
+| Dragonfly Early Reflections 3.2.10 | GPL-3.0 | ✔ | ✔ | Con los plugins en el proceso de la app, su interfaz bloqueaba el hilo principal (OpenGL esperaba un sincronismo vertical que no llegaba; fallo conocido, [dragonfly-reverb#169](https://github.com/michaelwillis/dragonfly-reverb/issues/169), que también congela REAPER, Audacity, Ableton y Reason). En su propio proceso la interfaz funciona (CLAP y VST3): responde cada ~16 ms y el audio sigue (ejemplo `isolation`). |
 
 ## Fallos del anfitrión encontrados y corregidos
 
@@ -69,15 +69,48 @@ El plugin de prueba (`mn-testplugin`) detecta ahora esos incumplimientos: `stop_
 
 ## Limitaciones conocidas
 
-- Los plugins corren dentro del proceso de la aplicación. Si la interfaz de un plugin bloquea el hilo
-  principal, como Early Reflections, la ventana de MusicNova se congela. El audio sigue sonando y el
-  proyecto ya está guardado, salvo el estado del plugin desde el último guardado. Aislar los plugins
-  en otro proceso queda pendiente.
 - `request_restart` de CLAP y `restartComponent` de VST3 no reinician el plugin. Ninguno de los
   probados lo necesitó.
 - No hay automatización de parámetros de plugins.
 - Las pistas de instrumento generan su audio sin conexión (al editar notas o cambiar de
   instrumento), no en tiempo real: tocar un teclado MIDI en vivo no está soportado.
+
+## Cada plugin en su propio proceso
+
+Cada efecto o instrumento con plugin corre en un proceso anfitrión propio: la aplicación relanzada
+con `--plugin-host` (en las pruebas, el binario `mn-plugin-host`). El anfitrión aloja el plugin con
+el mismo código de siempre. Su hilo principal ejecuta un bucle de mensajes de Windows: órdenes de
+la app y ventana del plugin. Un hilo de audio de prioridad crítica atiende los bloques.
+
+- **Órdenes** (cargar, parámetros, estado, abrir o cerrar la interfaz): JSON por líneas en
+  stdin/stdout. El anfitrión desvía su stdout original a stderr para que lo que impriman los
+  plugins no ensucie el protocolo.
+- **Audio:** memoria compartida con el bloque (≤ 2048 frames estéreo, cambios de parámetros y
+  notas) y dos eventos de Windows («pedido» y «hecho»). La espera incluye el proceso: si muere,
+  se nota al instante. Ida y vuelta medida: unos 36 µs por bloque (256 frames a 48 kHz duran 5,3 ms).
+- **Ventana del plugin:** es del anfitrión, sin ventana dueña en la app (una dueña de otro proceso
+  uniría las colas de entrada y un plugin colgado congelaría la app). Tiene botón en la barra de
+  tareas y la app le cede el primer plano con `AllowSetForegroundWindow`.
+- **Si se cae** (cualquier código de salida): el efecto pasa el audio sin procesar, la app avisa
+  («se cerró inesperadamente (código 0x…)») y el panel del efecto ofrece «Reiniciar plugin». Al
+  reiniciar se carga con el último estado guardado en el proyecto.
+- **Si se cuelga el audio:** en tiempo real, un bloque espera como máximo 250 ms. Los siguientes
+  pasan sin procesar sin esperar mientras siga colgado; tras 5 s se termina su proceso. Al exportar
+  o generar, el límite es de 30 s.
+- **Si se cuelga su hilo principal** (como la interfaz de Early Reflections): la orden que espera
+  se rinde a los 8 s, se termina el proceso y la app sigue respondiendo. Cargar tiene 60 s.
+- **Si la app desaparece:** el anfitrión ve el fin de stdin y se cierra solo.
+- `MUSICNOVA_PLUGINS_INPROCESS=1` vuelve a cargarlos en el proceso de la app (para depurar).
+
+Ejemplo con un plugin real: `cargo build -p mn-plugin --bins --examples` y
+`target\debug\examples\isolation <plugin> [id]` (carga, procesa, abre la interfaz y mide que
+las órdenes y el audio siguen respondiendo).
+
+Verificado con el plugin de prueba `test-crash` (se cae al procesar, cuelga el audio o cuelga el
+hilo principal a voluntad; pruebas en `crates/mn-plugin/tests/remote.rs`) y en la app real. Con
+Surge XT Effects en el máster, matar su proceso durante la reproducción no detuvo el audio; llegó el
+aviso y «Reiniciar plugin» lanzó un anfitrión nuevo con la interfaz operativa. Surge XT (VST3)
+generó la pista de instrumento en un anfitrión temporal.
 
 ## Instrumentos, latencia y sidechain
 

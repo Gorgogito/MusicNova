@@ -13,7 +13,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, GetWindowLongW, IsWindow,
     LoadCursorW, RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowLongW, SetWindowPos, ShowWindow,
     CW_USEDEFAULT, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, IDC_ARROW, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOZORDER, SW_SHOW, WM_CLOSE, WM_NCDESTROY, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_TOOLWINDOW,
+    SWP_NOZORDER, SW_SHOW, WM_CLOSE, WM_NCDESTROY, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
 };
 
@@ -130,9 +130,14 @@ pub(crate) fn open(inst: &Arc<Instance>) -> Result<(), String> {
     let title = wide(&format!("{} · MusicNova", inst.plugin.name));
     let class = wide(CLASS.trim_end_matches('\0'));
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+    // Con dueña (en el proceso de la app) es una ventana auxiliar; sin ella (en
+    // el proceso anfitrión) es una ventana normal con botón en la barra de tareas.
+    // Una dueña de otro proceso uniría las colas de entrada: un plugin colgado
+    // congelaría la app.
+    let ex = if owner_window() != 0 { WS_EX_TOOLWINDOW } else { WS_EX_APPWINDOW };
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            ex,
             class.as_ptr(),
             title.as_ptr(),
             style,

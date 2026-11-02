@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, errorMessage, type PluginParam } from '../lib/api'
+import { api, errorMessage, events, type PluginParam } from '../lib/api'
 import { Icon } from './Icon'
 
 /** Cada cuánto se releen los parámetros con el panel abierto: refleja lo que se
@@ -11,6 +11,8 @@ export function PluginControls({ slotId }: { slotId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [params, setParams] = useState<PluginParam[] | null>(null)
   const [open, setOpen] = useState(false)
+  /** El plugin se cayó o dejó de responder: se ofrece reiniciarlo. */
+  const [failed, setFailed] = useState(false)
   const [filter, setFilter] = useState('')
   const refresh = useRef<number | null>(null)
   /** Mientras el usuario arrastra un deslizador no se pisa su valor. */
@@ -23,6 +25,27 @@ export function PluginControls({ slotId }: { slotId: string }) {
         if (editing.current) return
         setParams(p)
         setError(null)
+      })
+      .catch((e) => setError(errorMessage(e)))
+
+  useEffect(() => {
+    const un = events.pluginFailed((e) => {
+      if (e.slot_id !== slotId) return
+      setFailed(true)
+      setError(e.message)
+    })
+    return () => {
+      un.then((f) => f())
+    }
+  }, [slotId])
+
+  const restart = () =>
+    api
+      .pluginRestart(slotId)
+      .then(() => {
+        setFailed(false)
+        setError(null)
+        if (open) load()
       })
       .catch((e) => setError(errorMessage(e)))
 
@@ -71,7 +94,16 @@ export function PluginControls({ slotId }: { slotId: string }) {
           Parámetros{params ? ` (${params.length})` : ''}
         </button>
       </div>
-      {error && <div className="notice error small">{error}</div>}
+      {error && (
+        <div className="notice error small">
+          {error}
+          {(failed || /dejó de responder|se cerró/.test(error)) && (
+            <button className="btn small" style={{ marginLeft: 8 }} onClick={restart}>
+              Reiniciar plugin
+            </button>
+          )}
+        </div>
+      )}
       {open && params && (
         <>
           {params.length > 12 && (

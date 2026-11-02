@@ -156,9 +156,28 @@ pub async fn plugins_scan(app: AppHandle, folders: Vec<String>) -> Result<Plugin
 }
 
 fn live(slot_id: &str) -> Result<std::sync::Arc<mn_plugin::Instance>, String> {
-    mn_plugin::instance(slot_id).ok_or_else(|| {
+    let inst = mn_plugin::instance(slot_id).ok_or_else(|| {
         mn_plugin::load_error(slot_id).unwrap_or_else(|| "el plugin no está cargado (¿falta el archivo?)".into())
-    })
+    })?;
+    match inst.failure() {
+        Some(e) => Err(e),
+        None => Ok(inst),
+    }
+}
+
+/// Vuelve a cargar un plugin que se cayó o dejó de responder.
+#[tauri::command]
+pub async fn plugin_restart(app: AppHandle, slot_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::restart_plugin(&app.state::<AppState>(), &slot_id)).await.map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+/// Aviso a la interfaz cuando el plugin de un efecto se cae o deja de responder
+/// (su proceso termina; el efecto pasa el audio sin procesar).
+pub fn on_plugin_failed(app: AppHandle) {
+    mn_plugin::on_plugin_failed(move |slot_id, message| {
+        let _ = app.emit("plugin-failed", serde_json::json!({ "slot_id": slot_id, "message": message }));
+    });
 }
 
 #[tauri::command]

@@ -60,6 +60,29 @@ static DESC_SYNTH: SyncDesc = SyncDesc(clap_plugin_descriptor {
 });
 const MAX_VOICES: usize = 16;
 
+/// Cuarto plugin: efecto que falla a propósito, para probar el aislamiento en
+/// otro proceso. Ganancia a +12 dB: se cae al procesar; a -60 dB: el audio se
+/// cuelga; con «Invertir» activo, guardar el estado cuelga el hilo principal.
+pub const CLAP_CRASH_ID: &CStr = c"org.musicnova.test-crash";
+static DESC_CRASH: SyncDesc = SyncDesc(clap_plugin_descriptor {
+    clap_version: CLAP_VERSION,
+    id: CLAP_CRASH_ID.as_ptr(),
+    name: c"MusicNova Test Crash".as_ptr(),
+    vendor: c"MusicNova".as_ptr(),
+    url: c"".as_ptr(),
+    manual_url: c"".as_ptr(),
+    support_url: c"".as_ptr(),
+    version: c"1.0.0".as_ptr(),
+    description: c"Falla a propósito".as_ptr(),
+    features: FEATURES.0.as_ptr(),
+});
+
+fn hang_forever() -> ! {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
 /// Voz del sintetizador de prueba: tecla, fase, nivel y si sigue pulsada.
 #[derive(Clone, Copy, Default)]
 struct Voice {
@@ -133,6 +156,8 @@ struct Plugin {
     /// Instrumento: voces y frecuencia de muestreo (solo el hilo de audio).
     synth: bool,
     voices: std::cell::UnsafeCell<([Voice; MAX_VOICES], f32)>,
+    /// Plugin que falla a propósito (ver `CLAP_CRASH_ID`).
+    faulty: bool,
 }
 
 impl Plugin {
@@ -262,6 +287,14 @@ unsafe extern "C" fn process(p: *const clap_plugin, process: *const clap_process
         return CLAP_PROCESS_CONTINUE;
     }
     me.read_events(pr.in_events);
+    if me.faulty {
+        if me.gain_db() >= 12.0 {
+            std::process::abort();
+        }
+        if me.gain_db() <= -60.0 {
+            hang_forever();
+        }
+    }
     let mut g = 10f64.powf(me.gain_db() / 20.0) as f32;
     if me.gain_db() <= -60.0 {
         g = 0.0;
@@ -377,6 +410,9 @@ static PARAMS: clap_plugin_params = clap_plugin_params {
 
 unsafe extern "C" fn state_save(p: *const clap_plugin, stream: *const clap_ostream) -> bool {
     let me = Plugin::from(p);
+    if me.faulty && me.invert.load(Ordering::Relaxed) {
+        hang_forever();
+    }
     let mut data = me.gain_db().to_le_bytes().to_vec();
     data.push(me.invert.load(Ordering::Relaxed) as u8);
     let write = (*stream).write.unwrap();
@@ -571,20 +607,21 @@ unsafe extern "C" fn on_main_thread(_p: *const clap_plugin) {}
 // ---- Fábrica y punto de entrada --------------------------------------------------
 
 unsafe extern "C" fn factory_count(_f: *const clap_plugin_factory) -> u32 {
-    3
+    4
 }
 unsafe extern "C" fn factory_descriptor(_f: *const clap_plugin_factory, index: u32) -> *const clap_plugin_descriptor {
     match index {
         0 => &DESC.0,
         1 => &DESC_DELAY.0,
         2 => &DESC_SYNTH.0,
+        3 => &DESC_CRASH.0,
         _ => ptr::null(),
     }
 }
 unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const clap_host, id: *const c_char) -> *const clap_plugin {
     let id = CStr::from_ptr(id);
-    let (desc, delay, synth) = if id == CLAP_ID {
-        (&DESC.0, 0, false)
+    let (desc, delay, synth) = if id == CLAP_ID || id == CLAP_CRASH_ID {
+        (if id == CLAP_ID { &DESC.0 } else { &DESC_CRASH.0 }, 0, false)
     } else if id == CLAP_DELAY_ID {
         (&DESC_DELAY.0, DELAY_FRAMES, false)
     } else if id == CLAP_SYNTH_ID {
@@ -615,6 +652,7 @@ unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const
         ring: std::cell::UnsafeCell::new((vec![[0.0; 2]; delay.max(1)], 0)),
         synth,
         voices: std::cell::UnsafeCell::new(([Voice::default(); MAX_VOICES], 48_000.0)),
+        faulty: id == CLAP_CRASH_ID,
     }));
     (*me).plugin.plugin_data = me as *mut c_void;
     &(*me).plugin

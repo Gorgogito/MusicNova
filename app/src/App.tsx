@@ -81,6 +81,7 @@ export default function App() {
     const subs = [
       events.transport(setTransport),
       events.workerStatus(setWorker),
+      events.pluginFailed((e) => showError(`${e.message}. La aplicación sigue funcionando; el efecto suena sin procesar hasta que lo reinicies.`)),
       // Una herramienta recién instalada (p. ej. FFmpeg) cambia lo que se puede importar.
       events.worker((ev) => {
         if (ev.event === 'job.done' && ev.data.kind === 'models.install') api.appInfo().then(setInfo).catch(() => {})
