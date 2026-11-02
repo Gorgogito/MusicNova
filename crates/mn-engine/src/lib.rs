@@ -154,6 +154,7 @@ pub(crate) enum Garbage {
     Monitor(Box<Monitor>),
     Clips(Vec<ClipFrames>),
     Automation(Box<ChannelAutomation>),
+    Data(Arc<Vec<f32>>),
 }
 
 pub(crate) enum Command {
@@ -183,6 +184,7 @@ pub(crate) enum Command {
     SetEffectEnabled(Option<TrackId>, usize, bool),
     /// Sustituye los clips de una pista.
     SetClips(TrackId, Box<Vec<ClipFrames>>),
+    SetData(TrackId, Arc<Vec<f32>>, Box<Vec<ClipFrames>>),
     /// Sustituye la automatización de una pista (`None` = bus máster).
     SetAutomation(Option<TrackId>, Option<Box<ChannelAutomation>>),
     /// Grabando: el transporte sigue más allá del final de las pistas.
@@ -400,6 +402,15 @@ impl Engine {
 
     pub fn set_clips(&self, id: TrackId, clips: Vec<ClipFrames>) -> Result<(), EngineError> {
         self.send(Command::SetClips(id, Box::new(clips)))
+    }
+
+    /// Sustituye el audio y los clips de una pista sin parar la reproducción
+    /// (pistas de instrumento que se vuelven a generar al editar sus notas).
+    pub fn set_track_data(&self, id: TrackId, data: Arc<Vec<f32>>, sample_rate: u32, clips: Vec<ClipFrames>) -> Result<(), EngineError> {
+        if sample_rate != self.sample_rate {
+            return Err(EngineError::SampleRate { expected: self.sample_rate, got: sample_rate });
+        }
+        self.send(Command::SetData(id, data, Box::new(clips)))
     }
 
     pub fn remove_track(&self, id: TrackId) -> Result<(), EngineError> {

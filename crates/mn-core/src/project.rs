@@ -35,6 +35,18 @@ pub enum TrackKind {
     Other,
     Generated,
     Recording,
+    /// Pista de instrumento: notas MIDI que suenan con un instrumento.
+    Instrument,
+}
+
+/// Con qué suena una pista de instrumento.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InstrumentSource {
+    /// Sintetizador integrado.
+    Synth { timbre: crate::transcription::Timbre },
+    /// Plugin instrumento CLAP o VST3 (con su estado).
+    Plugin { plugin: mn_fx::PluginRef },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +74,9 @@ pub struct TrackInfo {
     /// Curvas de volumen, panorama y parámetros de efectos.
     #[serde(default)]
     pub automation: Vec<AutomationLane>,
+    /// Instrumento de una pista de tipo `Instrument` (sus notas están en la transcripción).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instrument: Option<InstrumentSource>,
 }
 
 /// Duración mínima de un clip (s).
@@ -170,6 +185,7 @@ impl TrackInfo {
             offset: 0.0,
             clips: Vec::new(),
             automation: Vec::new(),
+            instrument: None,
         }
     }
 

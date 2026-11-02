@@ -70,6 +70,9 @@ pub struct PluginDescriptor {
     pub version: String,
     /// Categorías que declara el plugin ("audio-effect", "Fx|Reverb"...).
     pub category: String,
+    /// Instrumento (recibe notas) en vez de efecto.
+    #[serde(default)]
+    pub instrument: bool,
 }
 
 impl PluginDescriptor {
@@ -98,6 +101,17 @@ pub struct ParamInfo {
     pub text: String,
 }
 
+/// Nota para un instrumento dentro de un bloque.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NoteEvent {
+    /// Frame dentro del bloque.
+    pub time: u32,
+    pub key: u8,
+    /// 0–1.
+    pub velocity: f32,
+    pub on: bool,
+}
+
 /// Lo que cada formato debe ofrecer. Los métodos marcados «principal» solo se
 /// llaman desde el hilo principal; `process` y `reset`, desde el de audio.
 pub(crate) trait Backend: Send + Sync {
@@ -115,8 +129,9 @@ pub(crate) trait Backend: Send + Sync {
     fn gui_close(&self);
     fn gui_can_resize(&self) -> bool;
     fn gui_set_size(&self, w: u32, h: u32);
-    /// Audio: procesa `frames` (≤ MAX_BLOCK) en estéreo plano.
-    unsafe fn process(&self, input: [&[f32]; 2], output: [&mut [f32]; 2], params: &[(u32, f64)]);
+    /// Audio: procesa `frames` (≤ MAX_BLOCK) en estéreo plano, con los cambios
+    /// de parámetros y las notas del bloque (instrumentos).
+    unsafe fn process(&self, input: [&[f32]; 2], output: [&mut [f32]; 2], params: &[(u32, f64)], notes: &[NoteEvent]);
     /// Audio.
     fn reset(&self);
     /// Principal: latencia que añade el plugin (frames), consultada tras activarlo.
@@ -363,6 +378,7 @@ impl Processor for PluginProcessor {
                     [&self.inl[..n], &self.inr[..n]],
                     [&mut self.outl[..n], &mut self.outr[..n]],
                     events,
+                    &[],
                 );
             }
             for (i, f) in chunk.as_chunks_mut::<2>().0.iter_mut().enumerate() {
@@ -402,6 +418,55 @@ fn errors() -> &'static Mutex<HashMap<String, String>> {
 }
 
 /// Instancia del motor para el efecto `slot_id`.
+/// Nota para `render_instrument`: (inicio s, fin s, tecla MIDI, velocidad 1–127).
+pub type RenderNote = (f64, f64, u8, u8);
+
+/// Toca `notes` con un plugin instrumento y devuelve audio estéreo entrelazado
+/// a `sample_rate` hasta `length` segundos más `tail` de cola (liberaciones).
+/// Usa una instancia propia (como al exportar), con el estado guardado en `plugin`.
+pub fn render_instrument(plugin: &PluginRef, notes: &[RenderNote], sample_rate: u32, length: f64, tail: f64) -> Result<Vec<f32>, String> {
+    let inst = Instance::load(plugin, sample_rate)?;
+    let backend = inst.backend();
+    let frames = ((length + tail).max(0.0) * sample_rate as f64).ceil() as usize;
+    // Eventos en frames absolutos, ordenados (a igual frame, los «off» antes).
+    let mut events: Vec<(usize, NoteEvent)> = Vec::with_capacity(notes.len() * 2);
+    for &(start, end, key, vel) in notes {
+        let a = (start.max(0.0) * sample_rate as f64).round() as usize;
+        let b = ((end.max(start) * sample_rate as f64).round() as usize).max(a + 1);
+        events.push((a, NoteEvent { time: 0, key: key.min(127), velocity: vel.clamp(1, 127) as f32 / 127.0, on: true }));
+        events.push((b, NoteEvent { time: 0, key: key.min(127), velocity: 0.0, on: false }));
+    }
+    events.sort_by_key(|(f, e)| (*f, e.on));
+    let silence = vec![0.0f32; MAX_BLOCK];
+    let (mut outl, mut outr) = (vec![0.0f32; MAX_BLOCK], vec![0.0f32; MAX_BLOCK]);
+    let mut block_notes: Vec<NoteEvent> = Vec::with_capacity(1024);
+    let mut out = vec![0.0f32; frames * 2];
+    let mut next = 0;
+    let mut pos = 0;
+    IN_AUDIO.with(|f| f.set(true));
+    while pos < frames {
+        let n = MAX_BLOCK.min(frames - pos);
+        block_notes.clear();
+        while next < events.len() && events[next].0 < pos + n && block_notes.len() < block_notes.capacity() {
+            let (f, e) = events[next];
+            block_notes.push(NoteEvent { time: (f.max(pos) - pos) as u32, ..e });
+            next += 1;
+        }
+        unsafe {
+            backend.process([&silence[..n], &silence[..n]], [&mut outl[..n], &mut outr[..n]], &[], &block_notes);
+        }
+        for i in 0..n {
+            out[(pos + i) * 2] = outl[i];
+            out[(pos + i) * 2 + 1] = outr[i];
+        }
+        pos += n;
+    }
+    IN_AUDIO.with(|f| f.set(false));
+    drop(backend);
+    drop(inst);
+    Ok(out)
+}
+
 pub fn instance(slot_id: &str) -> Option<Arc<Instance>> {
     live().lock().unwrap().get(slot_id).cloned()
 }

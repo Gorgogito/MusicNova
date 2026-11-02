@@ -3,6 +3,7 @@
 //! (`analysis/instruments.json`). Incluye la exportación a MIDI estándar con
 //! mapa de tempo y un sintetizador sencillo para escuchar las notas.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
@@ -539,6 +540,264 @@ pub fn write_midi(parts: &[MidiPart], tempo: &TempoMap, beats_per_bar: u32, titl
     out
 }
 
+// ---- Lectura de MIDI estándar ---------------------------------------------------------
+
+/// Una pista (o un canal) de un archivo MIDI importado.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MidiTrackNotes {
+    pub name: String,
+    pub channel: u8,
+    /// Último cambio de programa General MIDI del canal (0 si no hay).
+    pub program: u8,
+    /// Canal 10: percusión.
+    pub drums: bool,
+    pub notes: Vec<Note>,
+}
+
+struct MidiReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> MidiReader<'a> {
+    fn byte(&mut self) -> Result<u8> {
+        let b = *self.data.get(self.pos).ok_or_else(|| CoreError::Format("MIDI truncado".into()))?;
+        self.pos += 1;
+        Ok(b)
+    }
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        let end = self.pos.checked_add(n).filter(|&e| e <= self.data.len()).ok_or_else(|| CoreError::Format("MIDI truncado".into()))?;
+        let out = &self.data[self.pos..end];
+        self.pos = end;
+        Ok(out)
+    }
+    fn vlq(&mut self) -> Result<u32> {
+        let mut v = 0u32;
+        for _ in 0..4 {
+            let b = self.byte()?;
+            v = (v << 7) | (b & 0x7f) as u32;
+            if b & 0x80 == 0 {
+                return Ok(v);
+            }
+        }
+        Err(CoreError::Format("número de longitud variable no válido en el MIDI".into()))
+    }
+}
+
+enum RawEvent {
+    NoteOn(u8, u8, u8),
+    NoteOff(u8, u8),
+    Program(u8, u8),
+    Bend(u8, u16),
+    Tempo(u32),
+    Name(String),
+    Rpn(u8, u8),
+}
+
+/// Lee un archivo MIDI estándar (formato 0 o 1): notas por pista y canal en
+/// segundos (con el mapa de tempo), pitch bend como curva de cada nota
+/// (rango por RPN 0, 2 semitonos si no se indica) y el canal 10 como batería.
+pub fn read_midi(bytes: &[u8]) -> Result<Vec<MidiTrackNotes>> {
+    let mut r = MidiReader { data: bytes, pos: 0 };
+    if r.take(4)? != b"MThd" {
+        return Err(CoreError::Format("no es un archivo MIDI".into()));
+    }
+    let hlen = u32::from_be_bytes(r.take(4)?.try_into().unwrap()) as usize;
+    let header = r.take(hlen)?;
+    if header.len() < 6 {
+        return Err(CoreError::Format("cabecera MIDI corta".into()));
+    }
+    let ntracks = u16::from_be_bytes([header[2], header[3]]) as usize;
+    let division = u16::from_be_bytes([header[4], header[5]]);
+    if division & 0x8000 != 0 {
+        return Err(CoreError::Format("MIDI con tiempo SMPTE: no compatible".into()));
+    }
+    let ppq = division.max(1) as f64;
+
+    // (pista, pulso, orden, evento)
+    let mut events: Vec<(usize, u64, usize, RawEvent)> = Vec::new();
+    for track in 0..ntracks {
+        if r.pos + 8 > bytes.len() {
+            break;
+        }
+        let id = r.take(4)?;
+        let len = u32::from_be_bytes(r.take(4)?.try_into().unwrap()) as usize;
+        let chunk = r.take(len)?;
+        if id != b"MTrk" {
+            continue;
+        }
+        let mut t = MidiReader { data: chunk, pos: 0 };
+        let (mut tick, mut status) = (0u64, 0u8);
+        let mut rpn = [[127u8; 2]; 16];
+        while t.pos < chunk.len() {
+            tick += t.vlq()? as u64;
+            let mut b = t.byte()?;
+            if b < 0x80 {
+                // Estado en curso: el byte ya es un dato.
+                t.pos -= 1;
+                b = status;
+            } else if b < 0xf0 {
+                status = b;
+            }
+            let order = events.len();
+            match b {
+                0xff => {
+                    let kind = t.byte()?;
+                    let n = t.vlq()? as usize;
+                    let d = t.take(n)?;
+                    match kind {
+                        0x51 if n == 3 => events.push((track, tick, order, RawEvent::Tempo(u32::from_be_bytes([0, d[0], d[1], d[2]])))),
+                        0x03 => events.push((track, tick, order, RawEvent::Name(String::from_utf8_lossy(d).trim().to_string()))),
+                        0x2f => break,
+                        _ => {}
+                    }
+                }
+                0xf0 | 0xf7 => {
+                    let n = t.vlq()? as usize;
+                    t.take(n)?;
+                }
+                _ if b >= 0x80 => {
+                    let ch = b & 0x0f;
+                    match b & 0xf0 {
+                        0x80 => {
+                            let (k, _) = (t.byte()?, t.byte()?);
+                            events.push((track, tick, order, RawEvent::NoteOff(ch, k)));
+                        }
+                        0x90 => {
+                            let (k, v) = (t.byte()?, t.byte()?);
+                            events.push((track, tick, order, if v == 0 { RawEvent::NoteOff(ch, k) } else { RawEvent::NoteOn(ch, k, v) }));
+                        }
+                        0xa0 => {
+                            t.take(2)?;
+                        }
+                        0xb0 => {
+                            let (cc, v) = (t.byte()?, t.byte()?);
+                            match cc {
+                                101 => rpn[ch as usize][0] = v,
+                                100 => rpn[ch as usize][1] = v,
+                                6 if rpn[ch as usize] == [0, 0] => events.push((track, tick, order, RawEvent::Rpn(ch, v))),
+                                _ => {}
+                            }
+                        }
+                        0xc0 => {
+                            let p = t.byte()?;
+                            events.push((track, tick, order, RawEvent::Program(ch, p)));
+                        }
+                        0xd0 => {
+                            t.byte()?;
+                        }
+                        0xe0 => {
+                            let (lo, hi) = (t.byte()?, t.byte()?);
+                            events.push((track, tick, order, RawEvent::Bend(ch, (hi as u16) << 7 | lo as u16)));
+                        }
+                        _ => return Err(CoreError::Format("evento MIDI desconocido".into())),
+                    }
+                }
+                _ => return Err(CoreError::Format("evento MIDI sin estado".into())),
+            }
+        }
+    }
+
+    // Mapa de tempo (de cualquier pista) → segundos.
+    let mut tempos: Vec<(u64, u32)> = events.iter().filter_map(|(_, tk, _, e)| if let RawEvent::Tempo(us) = e { Some((*tk, *us)) } else { None }).collect();
+    tempos.sort_by_key(|t| t.0);
+    let seconds = |tick: u64| -> f64 {
+        let (mut sec, mut last, mut us) = (0.0, 0u64, 500_000u32);
+        for &(tk, t_us) in &tempos {
+            if tk >= tick {
+                break;
+            }
+            sec += (tk - last) as f64 / ppq * us as f64 / 1e6;
+            last = tk;
+            us = t_us;
+        }
+        sec + (tick - last) as f64 / ppq * us as f64 / 1e6
+    };
+
+    events.sort_by_key(|e| (e.0, e.1, e.2));
+    let mut out: Vec<MidiTrackNotes> = Vec::new();
+    let mut names: HashMap<usize, String> = HashMap::new();
+    let mut program = [0u8; 16];
+    let mut range = [2.0f32; 16];
+    let mut bend = [0.0f32; 16];
+    // Notas abiertas: (pista, canal, tecla) → (índice en `out`, posición de la nota)
+    let mut open: HashMap<(usize, u8, u8), (usize, usize)> = HashMap::new();
+    let mut slot_of: HashMap<(usize, u8), usize> = HashMap::new();
+    for (track, tick, _, ev) in &events {
+        let t = seconds(*tick);
+        match ev {
+            RawEvent::Name(n) => {
+                names.entry(*track).or_insert_with(|| n.clone());
+            }
+            RawEvent::Program(ch, p) => program[*ch as usize] = *p,
+            RawEvent::Rpn(ch, semis) => range[*ch as usize] = (*semis).max(1) as f32,
+            RawEvent::Tempo(_) => {}
+            RawEvent::Bend(ch, v) => {
+                let cents = (*v as f32 - 8192.0) / 8192.0 * range[*ch as usize] * 100.0;
+                bend[*ch as usize] = cents;
+                // Se añade a las notas que suenan en ese canal.
+                for (&(tr, c, _), &(slot, idx)) in &open {
+                    if tr == *track && c == *ch {
+                        let n = &mut out[slot].notes[idx];
+                        n.bends.push([(t - n.start) as f32, cents]);
+                    }
+                }
+            }
+            RawEvent::NoteOn(ch, k, v) => {
+                let slot = *slot_of.entry((*track, *ch)).or_insert_with(|| {
+                    out.push(MidiTrackNotes {
+                        name: String::new(),
+                        channel: *ch,
+                        program: program[*ch as usize],
+                        drums: *ch == 9,
+                        notes: Vec::new(),
+                    });
+                    out.len() - 1
+                });
+                // Una nota repetida sin cerrar se cierra aquí.
+                if let Some((s, idx)) = open.remove(&(*track, *ch, *k)) {
+                    out[s].notes[idx].end = t;
+                }
+                out[slot].program = program[*ch as usize];
+                let mut n = Note::new(t, t, *k, *v);
+                if bend[*ch as usize] != 0.0 {
+                    n.bends.push([0.0, bend[*ch as usize]]);
+                }
+                out[slot].notes.push(n);
+                open.insert((*track, *ch, *k), (slot, out[slot].notes.len() - 1));
+            }
+            RawEvent::NoteOff(ch, k) => {
+                if let Some((s, idx)) = open.remove(&(*track, *ch, *k)) {
+                    out[s].notes[idx].end = t;
+                }
+            }
+        }
+    }
+    // Notas sin cierre: una negra.
+    for ((track, _, _), (s, idx)) in open {
+        let _ = track;
+        let n = &mut out[s].notes[idx];
+        n.end = n.start + 60.0 / 120.0;
+    }
+    for ((track, ch), slot) in slot_of {
+        let base = names.get(&track).cloned().unwrap_or_default();
+        let m = &mut out[slot];
+        m.name = match (base.is_empty(), ch == 9) {
+            (true, true) => "Batería".into(),
+            (true, false) => format!("Canal {}", ch + 1),
+            (false, _) => base,
+        };
+        // Un bend al final de la nota sin efecto audible se descarta.
+        for n in &mut m.notes {
+            let dur = (n.end - n.start) as f32;
+            n.bends.retain(|p| p[0] <= dur);
+        }
+        m.notes = sanitize_notes(std::mem::take(&mut m.notes));
+    }
+    out.retain(|m| !m.notes.is_empty());
+    Ok(out)
+}
+
 // ---- Síntesis -------------------------------------------------------------------------
 
 /// Timbre del sintetizador para escuchar una transcripción.
@@ -553,6 +812,10 @@ pub enum Timbre {
     Lead,
     /// Batería: cada altura es un instrumento del mapa de percusión General MIDI.
     Drums,
+    /// Colchón: ataque y liberación lentos.
+    Pad,
+    /// Cuerda pulsada: ataque inmediato y caída rápida.
+    Pluck,
 }
 
 /// Ruido blanco reproducible (xorshift32) en [−1, 1).
@@ -616,7 +879,7 @@ fn drum_hit(out: &mut [f32], at: usize, pitch: u8, gain: f32, sr: f32, noise: &m
 /// Sintetiza las notas en estéreo a `rate`, con la duración `length` (s) o la
 /// de la última nota. Normaliza a −1 dBFS si satura.
 pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre) -> AudioBuffer {
-    let rel = 0.08;
+    let rel = if timbre == Timbre::Pad { 0.5 } else { 0.08 };
     let end = length.unwrap_or_else(|| notes.iter().map(|n| n.end).fold(0.0, f64::max) + rel);
     let frames = (end.max(0.0) * rate as f64).ceil() as usize;
     let mut mono = vec![0.0f32; frames];
@@ -625,6 +888,8 @@ pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre
         Timbre::Bass => &[1.0, 0.35, 0.08],
         Timbre::Lead => &[1.0, 0.5, 0.33, 0.25, 0.2, 0.16],
         Timbre::Drums => &[],
+        Timbre::Pad => &[1.0, 0.3, 0.2, 0.08, 0.05],
+        Timbre::Pluck => &[1.0, 0.6, 0.4, 0.3, 0.2, 0.12, 0.08],
     };
     let sr = rate as f32;
     if timbre == Timbre::Drums {
@@ -642,7 +907,7 @@ pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre
         let a = (n.start * rate as f64) as usize;
         let hold = ((n.end - n.start) * rate as f64) as usize;
         let total = hold + (rel * rate as f64) as usize;
-        let attack = (0.005 * sr) as usize;
+        let attack = ((if timbre == Timbre::Pad { 0.15 } else { 0.005 }) * sr) as usize;
         for k in 0..total {
             let i = a + k;
             if i >= frames {
@@ -655,6 +920,8 @@ pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre
                 Timbre::Bass => (-t * 1.2).exp(),
                 Timbre::Lead => 0.85 + 0.15 * (-t * 6.0).exp(),
                 Timbre::Drums => 0.0,
+                Timbre::Pad => 1.0,
+                Timbre::Pluck => (-t * 7.0).exp(),
             };
             if k >= hold {
                 env *= 1.0 - (k - hold) as f32 / (total - hold).max(1) as f32;
@@ -955,5 +1222,36 @@ mod tests {
         let hz = ups as f64 / 0.3;
         assert!((hz - 440.0).abs() < 8.0, "{hz}");
         assert!(left[(0.8 * rate as f64) as usize..].iter().all(|&s| s == 0.0), "silencio tras la liberación");
+    }
+
+    #[test]
+    fn reads_back_written_midi() {
+        // Tempo variable, curvas de tono, acorde y batería.
+        let beats: Vec<f64> = (0..40).map(|k| 0.5 * k as f64 + 0.01 * (k * k) as f64 / 40.0).collect();
+        let tempo = TempoMap::from_beats(&beats, Some(0), 4);
+        let keys = [note(0.0, 0.5, 60), note(0.5, 1.5, 64), note(0.5, 1.5, 67), bent(2.0, 3.0, 62, &[[0.0, 0.0], [0.5, 100.0], [1.0, 100.0]])];
+        let drums = [note(0.0, 0.1, 36), note(0.5, 0.6, 38)];
+        let parts = [
+            MidiPart { name: "Teclado", program: 4, notes: &keys, drums: false },
+            MidiPart { name: "Batería", program: 0, notes: &drums, drums: true },
+        ];
+        let bytes = write_midi(&parts, &tempo, 4, "Prueba");
+        let tracks = read_midi(&bytes).unwrap();
+        assert_eq!(tracks.len(), 2, "{:?}", tracks.iter().map(|t| &t.name).collect::<Vec<_>>());
+        let k = tracks.iter().find(|t| t.name == "Teclado").unwrap();
+        assert_eq!(k.program, 4);
+        assert!(!k.drums);
+        assert_eq!(k.notes.len(), 4);
+        for (a, b) in k.notes.iter().zip(keys.iter()) {
+            assert_eq!(a.pitch, b.pitch);
+            // El escritor omite cambios de tempo de menos del 0,5 %: unos ms de error.
+            assert!((a.start - b.start).abs() < 0.015 && (a.end - b.end).abs() < 0.015, "{a:?} {b:?}");
+        }
+        // La curva vuelve con su forma: sube un semitono a mitad de la nota.
+        let bn = &k.notes[3];
+        assert!(bn.bend_at(0.0).abs() < 5.0 && (bn.bend_at(0.75) - 100.0).abs() < 5.0, "{:?}", bn.bends);
+        let d = tracks.iter().find(|t| t.drums).unwrap();
+        assert_eq!(d.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![36, 38]);
+        assert!(read_midi(b"RIFF....").is_err());
     }
 }

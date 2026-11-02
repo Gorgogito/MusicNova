@@ -11,11 +11,12 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    clap_event_header, clap_event_param_value, clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID,
-    CLAP_EVENT_PARAM_VALUE,
+    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events, clap_output_events,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
 };
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS};
 use clap_sys::ext::gui::{clap_host_gui, clap_plugin_gui, clap_window, clap_window_handle, CLAP_EXT_GUI, CLAP_WINDOW_API_WIN32};
+use clap_sys::ext::note_ports::{clap_plugin_note_ports, CLAP_EXT_NOTE_PORTS};
 use clap_sys::ext::latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::log::{clap_host_log, clap_log_severity, CLAP_EXT_LOG};
 use clap_sys::ext::params::{
@@ -32,7 +33,7 @@ use clap_sys::process::clap_process;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::{clap_version_is_compatible, CLAP_VERSION};
 
-use crate::{is_audio_thread, is_main_thread, on_main_async, Backend, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
+use crate::{NoteEvent, is_audio_thread, is_main_thread, on_main_async, Backend, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
 
 /// Biblioteca CLAP cargada; se comparte entre instancias del mismo archivo y
 /// llama a `deinit` al soltarse.
@@ -111,8 +112,9 @@ pub(crate) fn scan(path: &Path) -> Result<Vec<PluginDescriptor>, String> {
                     p = p.add(1);
                 }
             }
-            // Solo efectos de audio (los instrumentos necesitan pistas MIDI).
-            if !features.iter().any(|f| f == "audio-effect") {
+            // Efectos de audio e instrumentos (para pistas de instrumento).
+            let instrument = features.iter().any(|f| f == "instrument");
+            if !instrument && !features.iter().any(|f| f == "audio-effect") {
                 continue;
             }
             out.push(PluginDescriptor {
@@ -123,6 +125,7 @@ pub(crate) fn scan(path: &Path) -> Result<Vec<PluginDescriptor>, String> {
                 vendor: cstr(d.vendor),
                 version: cstr(d.version),
                 category: features.join(", "),
+                instrument,
             });
         }
     }
@@ -249,7 +252,8 @@ static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(laten
 
 // ---- Listas de eventos para `process` -----------------------------------------
 
-struct InEvents<'a>(&'a [clap_event_param_value]);
+/// Eventos de entrada del bloque, ordenados por tiempo (parámetros y notas).
+struct InEvents<'a>(&'a [*const clap_event_header]);
 
 unsafe extern "C" fn in_size(list: *const clap_input_events) -> u32 {
     let ev = &*((*list).ctx as *const InEvents);
@@ -257,7 +261,7 @@ unsafe extern "C" fn in_size(list: *const clap_input_events) -> u32 {
 }
 unsafe extern "C" fn in_get(list: *const clap_input_events, index: u32) -> *const clap_event_header {
     let ev = &*((*list).ctx as *const InEvents);
-    ev.0.get(index as usize).map_or(ptr::null(), |e| &e.header as *const _)
+    ev.0.get(index as usize).copied().unwrap_or(ptr::null())
 }
 unsafe extern "C" fn out_try_push(_list: *const clap_output_events, _ev: *const clap_event_header) -> bool {
     true
@@ -273,6 +277,8 @@ pub(crate) struct ClapPlugin {
     gui: Option<&'static clap_plugin_gui>,
     in_channels: u32,
     out_channels: u32,
+    /// Recibe notas (puerto de notas de entrada).
+    instrument: bool,
     processing: AtomicBool,
     gui_open: AtomicBool,
     /// Solo lo toca el hilo de audio.
@@ -283,6 +289,8 @@ pub(crate) struct ClapPlugin {
 struct AudioScratch {
     steady: i64,
     events: Vec<clap_event_param_value>,
+    notes: Vec<clap_event_note>,
+    order: Vec<*const clap_event_header>,
     mono: Vec<f32>,
 }
 
@@ -334,7 +342,10 @@ impl ClapPlugin {
                 return Err("el plugin no se pudo inicializar".into());
             }
             let (in_channels, out_channels) = main_ports(plugin);
-            if in_channels == 0 || out_channels == 0 {
+            let instrument = ext::<clap_plugin_note_ports>(plugin, CLAP_EXT_NOTE_PORTS)
+                .and_then(|n| n.count)
+                .is_some_and(|count| count(plugin, true) > 0);
+            if out_channels == 0 || (in_channels == 0 && !instrument) {
                 host.alive.store(false, Ordering::Release);
                 if let Some(d) = (*plugin).destroy {
                     d(plugin);
@@ -356,11 +367,14 @@ impl ClapPlugin {
                 plugin,
                 in_channels,
                 out_channels,
+                instrument,
                 processing: AtomicBool::new(false),
                 gui_open: AtomicBool::new(false),
                 audio: UnsafeCell::new(AudioScratch {
                     steady: 0,
                     events: Vec::with_capacity(1024),
+                    notes: Vec::with_capacity(1024),
+                    order: Vec::with_capacity(2048),
                     mono: vec![0.0; MAX_BLOCK],
                 }),
                 _lib: lib,
@@ -518,15 +532,20 @@ impl Backend for ClapPlugin {
         }
     }
 
-    unsafe fn process(&self, input: [&[f32]; 2], output: [&mut [f32]; 2], params: &[(u32, f64)]) {
+    unsafe fn process(&self, input: [&[f32]; 2], output: [&mut [f32]; 2], params: &[(u32, f64)], notes: &[NoteEvent]) {
         let s = &mut *self.audio.get();
         let n = input[0].len();
         if !self.processing.load(Ordering::Relaxed) {
             let ok = (*self.plugin).start_processing.is_some_and(|f| f(self.plugin));
             self.processing.store(ok, Ordering::Relaxed);
             if !ok {
-                output[0].copy_from_slice(input[0]);
-                output[1].copy_from_slice(input[1]);
+                if self.in_channels == 0 {
+                    output[0].fill(0.0);
+                    output[1].fill(0.0);
+                } else {
+                    output[0].copy_from_slice(input[0]);
+                    output[1].copy_from_slice(input[1]);
+                }
                 return;
             }
         }
@@ -549,7 +568,31 @@ impl Backend for ClapPlugin {
                 value,
             });
         }
-        let in_events_data = InEvents(&s.events);
+        s.notes.clear();
+        if self.instrument {
+            for e in notes.iter().take(s.notes.capacity()) {
+                s.notes.push(clap_event_note {
+                    header: clap_event_header {
+                        size: std::mem::size_of::<clap_event_note>() as u32,
+                        time: e.time.min(n.saturating_sub(1) as u32),
+                        space_id: CLAP_CORE_EVENT_SPACE_ID,
+                        type_: if e.on { CLAP_EVENT_NOTE_ON } else { CLAP_EVENT_NOTE_OFF },
+                        flags: 0,
+                    },
+                    note_id: -1,
+                    port_index: 0,
+                    channel: 0,
+                    key: e.key as i16,
+                    velocity: e.velocity.clamp(0.0, 1.0) as f64,
+                });
+            }
+        }
+        // Lista única ordenada por tiempo, como exige CLAP.
+        s.order.clear();
+        s.order.extend(s.events.iter().map(|e| &e.header as *const clap_event_header));
+        s.order.extend(s.notes.iter().map(|e| &e.header as *const clap_event_header));
+        s.order.sort_by_key(|&h| (*h).time);
+        let in_events_data = InEvents(&s.order);
         let in_events = clap_input_events {
             ctx: &in_events_data as *const InEvents as *mut c_void,
             size: Some(in_size),
@@ -585,9 +628,9 @@ impl Backend for ClapPlugin {
             steady_time: s.steady,
             frames_count: n as u32,
             transport: ptr::null(),
-            audio_inputs: &audio_in,
+            audio_inputs: if self.in_channels == 0 { ptr::null() } else { &audio_in },
             audio_outputs: &mut audio_out,
-            audio_inputs_count: 1,
+            audio_inputs_count: if self.in_channels == 0 { 0 } else { 1 },
             audio_outputs_count: 1,
             in_events: &in_events,
             out_events: &out_events,

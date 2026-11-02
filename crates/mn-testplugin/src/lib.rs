@@ -16,7 +16,11 @@ use std::sync::Mutex;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
-use clap_sys::events::{clap_event_header, clap_event_param_value, clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE};
+use clap_sys::events::{
+    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID,
+    CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+};
+use clap_sys::ext::note_ports::{clap_note_port_info, clap_plugin_note_ports, CLAP_EXT_NOTE_PORTS, CLAP_NOTE_DIALECT_CLAP};
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_STEREO};
 use clap_sys::ext::gui::{clap_plugin_gui, clap_window, CLAP_EXT_GUI, CLAP_WINDOW_API_WIN32};
 use clap_sys::ext::latency::{clap_plugin_latency, CLAP_EXT_LATENCY};
@@ -36,6 +40,35 @@ pub const CLAP_ID: &CStr = c"org.musicnova.test-gain";
 /// (para probar la compensación de latencia del anfitrión).
 pub const CLAP_DELAY_ID: &CStr = c"org.musicnova.test-delay";
 pub const DELAY_FRAMES: usize = 1000;
+/// Tercer plugin: instrumento (puerto de notas, sin entrada de audio) que toca
+/// un seno por nota, para probar las pistas de instrumento.
+pub const CLAP_SYNTH_ID: &CStr = c"org.musicnova.test-synth";
+struct SynthFeatures([*const c_char; 3]);
+unsafe impl Sync for SynthFeatures {}
+static SYNTH_FEATURES: SynthFeatures = SynthFeatures([c"instrument".as_ptr(), c"synthesizer".as_ptr(), ptr::null()]);
+static DESC_SYNTH: SyncDesc = SyncDesc(clap_plugin_descriptor {
+    clap_version: CLAP_VERSION,
+    id: CLAP_SYNTH_ID.as_ptr(),
+    name: c"MusicNova Test Synth".as_ptr(),
+    vendor: c"MusicNova".as_ptr(),
+    url: c"".as_ptr(),
+    manual_url: c"".as_ptr(),
+    support_url: c"".as_ptr(),
+    version: c"1.0.0".as_ptr(),
+    description: c"Seno por nota".as_ptr(),
+    features: SYNTH_FEATURES.0.as_ptr(),
+});
+const MAX_VOICES: usize = 16;
+
+/// Voz del sintetizador de prueba: tecla, fase, nivel y si sigue pulsada.
+#[derive(Clone, Copy, Default)]
+struct Voice {
+    key: i16,
+    phase: f32,
+    level: f32,
+    vel: f32,
+    held: bool,
+}
 
 /// Incumplimientos de los estándares que el plugin detecta en el anfitrión
 /// (función llamada en un hilo indebido, falta de una interfaz obligatoria…).
@@ -97,6 +130,9 @@ struct Plugin {
     /// Retardo en frames (0 en la ganancia) y su memoria, solo del hilo de audio.
     delay: usize,
     ring: std::cell::UnsafeCell<(Vec<[f32; 2]>, usize)>,
+    /// Instrumento: voces y frecuencia de muestreo (solo el hilo de audio).
+    synth: bool,
+    voices: std::cell::UnsafeCell<([Voice; MAX_VOICES], f32)>,
 }
 
 impl Plugin {
@@ -149,8 +185,58 @@ unsafe extern "C" fn init(_p: *const clap_plugin) -> bool {
 unsafe extern "C" fn destroy(p: *const clap_plugin) {
     drop(Box::from_raw((*p).plugin_data as *mut Plugin));
 }
-unsafe extern "C" fn activate(_p: *const clap_plugin, _sr: f64, _min: u32, _max: u32) -> bool {
+unsafe extern "C" fn activate(p: *const clap_plugin, sr: f64, _min: u32, _max: u32) -> bool {
+    (*Plugin::from(p).voices.get()).1 = sr as f32;
     true
+}
+
+/// Instrumento: aplica las notas de cada momento y genera el bloque.
+unsafe fn synth_process(me: &Plugin, pr: &clap_process) {
+    let n = pr.frames_count as usize;
+    let out: &clap_audio_buffer = &*pr.audio_outputs;
+    let (voices, sr) = &mut *me.voices.get();
+    let sr = if *sr > 0.0 { *sr } else { 48_000.0 };
+    let ev = &*pr.in_events;
+    let count = ev.size.map_or(0, |s| s(pr.in_events));
+    let mut next = 0;
+    for k in 0..n {
+        while next < count {
+            let h = ev.get.unwrap()(pr.in_events, next);
+            if (*h).time as usize > k {
+                break;
+            }
+            next += 1;
+            if (*h).space_id != CLAP_CORE_EVENT_SPACE_ID {
+                continue;
+            }
+            let t = (*h).type_;
+            if t == CLAP_EVENT_NOTE_ON || t == CLAP_EVENT_NOTE_OFF {
+                let e = &*(h as *const clap_event_note);
+                if t == CLAP_EVENT_NOTE_ON {
+                    if let Some(v) = voices.iter_mut().find(|v| v.level <= 0.0 && !v.held) {
+                        *v = Voice { key: e.key, phase: 0.0, level: 1.0, vel: e.velocity as f32, held: true };
+                    }
+                } else {
+                    for v in voices.iter_mut().filter(|v| v.held && v.key == e.key) {
+                        v.held = false;
+                    }
+                }
+            }
+        }
+        let mut s = 0.0f32;
+        for v in voices.iter_mut().filter(|v| v.level > 0.0) {
+            let f = 440.0 * 2f32.powf((v.key as f32 - 69.0) / 12.0);
+            v.phase = (v.phase + f / sr).fract();
+            s += 0.25 * v.vel * v.level * (std::f32::consts::TAU * v.phase).sin();
+            if !v.held {
+                // Liberación de unos 10 ms.
+                v.level = (v.level - 1.0 / (0.01 * sr)).max(0.0);
+            }
+        }
+        for ch in 0..out.channel_count.min(2) as usize {
+            *(*out.data32.add(ch)).add(k) = s;
+        }
+    }
 }
 unsafe extern "C" fn deactivate(_p: *const clap_plugin) {}
 unsafe extern "C" fn start_processing(_p: *const clap_plugin) -> bool {
@@ -166,6 +252,15 @@ unsafe extern "C" fn reset(p: *const clap_plugin) {
 unsafe extern "C" fn process(p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
     let me = Plugin::from(p);
     let pr = &*process;
+    if me.synth {
+        if pr.audio_inputs_count != 0 {
+            violation("el instrumento recibió entradas de audio");
+        }
+        if pr.audio_outputs_count >= 1 {
+            synth_process(me, pr);
+        }
+        return CLAP_PROCESS_CONTINUE;
+    }
     me.read_events(pr.in_events);
     let mut g = 10f64.powf(me.gain_db() / 20.0) as f32;
     if me.gain_db() <= -60.0 {
@@ -315,9 +410,26 @@ static STATE: clap_plugin_state = clap_plugin_state { save: Some(state_save), lo
 
 // ---- Puertos de audio -------------------------------------------------------------
 
-unsafe extern "C" fn ports_count(_p: *const clap_plugin, _is_input: bool) -> u32 {
-    1
+unsafe extern "C" fn ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
+    // El instrumento no tiene entrada de audio.
+    if is_input && Plugin::from(p).synth { 0 } else { 1 }
 }
+
+unsafe extern "C" fn note_ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
+    (is_input && Plugin::from(p).synth) as u32
+}
+unsafe extern "C" fn note_ports_get(_p: *const clap_plugin, index: u32, is_input: bool, info: *mut clap_note_port_info) -> bool {
+    if index != 0 || !is_input {
+        return false;
+    }
+    let info = &mut *info;
+    info.id = 0;
+    info.supported_dialects = CLAP_NOTE_DIALECT_CLAP;
+    info.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
+    copy_name(&mut info.name, "Notas");
+    true
+}
+static NOTE_PORTS: clap_plugin_note_ports = clap_plugin_note_ports { count: Some(note_ports_count), get: Some(note_ports_get) };
 unsafe extern "C" fn ports_get(_p: *const clap_plugin, index: u32, _is_input: bool, info: *mut clap_audio_port_info) -> bool {
     if index != 0 {
         return false;
@@ -438,6 +550,9 @@ unsafe extern "C" fn get_extension(p: *const clap_plugin, id: *const c_char) -> 
     if CStr::from_ptr(id) == CLAP_EXT_LATENCY && Plugin::from(p).delay > 0 {
         return &LATENCY as *const _ as *const c_void;
     }
+    if CStr::from_ptr(id) == CLAP_EXT_NOTE_PORTS && Plugin::from(p).synth {
+        return &NOTE_PORTS as *const _ as *const c_void;
+    }
     let id = CStr::from_ptr(id);
     if id == CLAP_EXT_PARAMS {
         &PARAMS as *const _ as *const c_void
@@ -456,21 +571,24 @@ unsafe extern "C" fn on_main_thread(_p: *const clap_plugin) {}
 // ---- Fábrica y punto de entrada --------------------------------------------------
 
 unsafe extern "C" fn factory_count(_f: *const clap_plugin_factory) -> u32 {
-    2
+    3
 }
 unsafe extern "C" fn factory_descriptor(_f: *const clap_plugin_factory, index: u32) -> *const clap_plugin_descriptor {
     match index {
         0 => &DESC.0,
         1 => &DESC_DELAY.0,
+        2 => &DESC_SYNTH.0,
         _ => ptr::null(),
     }
 }
 unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const clap_host, id: *const c_char) -> *const clap_plugin {
     let id = CStr::from_ptr(id);
-    let (desc, delay) = if id == CLAP_ID {
-        (&DESC.0, 0)
+    let (desc, delay, synth) = if id == CLAP_ID {
+        (&DESC.0, 0, false)
     } else if id == CLAP_DELAY_ID {
-        (&DESC_DELAY.0, DELAY_FRAMES)
+        (&DESC_DELAY.0, DELAY_FRAMES, false)
+    } else if id == CLAP_SYNTH_ID {
+        (&DESC_SYNTH.0, 0, true)
     } else {
         return ptr::null();
     };
@@ -495,6 +613,8 @@ unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const
         gui: Mutex::new(None),
         delay,
         ring: std::cell::UnsafeCell::new((vec![[0.0; 2]; delay.max(1)], 0)),
+        synth,
+        voices: std::cell::UnsafeCell::new(([Voice::default(); MAX_VOICES], 48_000.0)),
     }));
     (*me).plugin.plugin_data = me as *mut c_void;
     &(*me).plugin

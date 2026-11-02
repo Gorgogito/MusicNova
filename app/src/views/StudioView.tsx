@@ -22,6 +22,7 @@ import {
 import { NotesLane } from '../components/NotesLane'
 import { TranscriptionPanel } from '../components/TranscriptionPanel'
 import { GenerationPanel } from '../components/GenerationPanel'
+import { InstrumentsPanel } from '../components/InstrumentsPanel'
 import type { GenerationJobs } from '../lib/useGeneration'
 import type { TranscriptionJobs } from '../lib/useTranscription'
 import { RecordPanel } from '../components/RecordPanel'
@@ -90,7 +91,7 @@ interface Props {
   onProjectReplaced: (p: ProjectView) => void
 }
 
-type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record' | 'transcription' | 'generate'
+type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record' | 'transcription' | 'generate' | 'instruments'
 
 const HEADER_W = 280
 const MAX_ZOOM = 64
@@ -329,15 +330,35 @@ export function StudioView({
     },
     [onNotesChange],
   )
+  // Pistas de instrumento: su audio se regenera al cambiar las notas.
+  const projectRef = useRef(project)
+  useEffect(() => {
+    projectRef.current = project
+  })
+  const replaceTrack = useCallback(
+    (tv: TrackView) => {
+      const p = projectRef.current
+      onProjectReplaced({
+        ...p,
+        tracks: p.tracks.map((t) => (t.id === tv.id ? tv : t)),
+        project: { ...p.project, tracks: p.project.tracks.map((t) => (t.id === tv.id ? tv : t)) },
+      })
+    },
+    [onProjectReplaced],
+  )
   const saveNotes = useCallback(
     (trackId: string, notes: Note[]) => {
       setTrackNotes(trackId, notes)
+      const instrument = projectRef.current.tracks.find((t) => t.id === trackId)?.kind === 'instrument'
       api
         .notesUpdate(trackId, notes)
-        .then(onNotesChange)
+        .then((t) => {
+          onNotesChange(t)
+          return instrument ? api.instrumentRender(trackId).then(replaceTrack) : undefined
+        })
         .catch((err) => onError(errorMessage(err)))
     },
-    [setTrackNotes, onNotesChange, onError],
+    [setTrackNotes, onNotesChange, onError, replaceTrack],
   )
 
   /** Aplica un lado (antes o después) de un cambio del historial. */
@@ -548,6 +569,7 @@ export function StudioView({
   /** Tomas y pistas generadas (síntesis MIDI, voz afinada, sin ruido, acompañamientos de IA). */
   const removable = (t: TrackView) =>
     t.kind === 'recording' ||
+    t.kind === 'instrument' ||
     (t.kind === 'generated' && ['audio/midi/', 'audio/tuned/', 'audio/denoised/', 'audio/generated/'].some((d) => t.file.startsWith(d)))
   const removeTrack = async (t: TrackView) => {
     const ok = await ask(`¿Eliminar «${t.name}»? Su audio se borrará del proyecto.`, {
@@ -649,6 +671,13 @@ export function StudioView({
             <Icon name="piano" size={16} /> Transcripción
           </button>
           <button
+            className={`btn ${shownPanel === 'instruments' ? 'active' : ''}`}
+            onClick={() => setPanel(panel === 'instruments' ? null : 'instruments')}
+            title="Pistas de instrumento: notas MIDI con sintetizador o plugin"
+          >
+            <Icon name="music" size={16} /> Instrumentos
+          </button>
+          <button
             className={`btn ${shownPanel === 'generate' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'generate' ? null : 'generate')}
             title="Limpiar ruido y generar acompañamientos con IA"
@@ -745,6 +774,16 @@ export function StudioView({
           onChange={saveLyrics}
           onSeek={seek}
           onOpenModels={onOpenModels}
+          onError={onError}
+        />
+      )}
+      {shownPanel === 'instruments' && (
+        <InstrumentsPanel
+          project={project}
+          shownNotes={shownNotes}
+          onToggleNotes={toggleNotes}
+          onProjectReplaced={onProjectReplaced}
+          onTrackReplaced={replaceTrack}
           onError={onError}
         />
       )}

@@ -3,6 +3,7 @@
 
 mod plugins;
 mod generate;
+mod instruments;
 mod transcribe;
 mod worker;
 
@@ -1420,7 +1421,7 @@ fn track_remove(state: State<'_, AppState>, track_id: Uuid) -> Result<(), String
     project.save(&dir).map_err(err)?;
     let slot_ids = plugin_slot_ids(project);
     mn_plugin::retain_instances(|id| slot_ids.iter().any(|s| s == id));
-    if [RECORDINGS_DIR, transcribe::MIDI_DIR, transcribe::TUNED_DIR, generate::DENOISED_DIR, generate::GENERATED_DIR]
+    if [RECORDINGS_DIR, transcribe::MIDI_DIR, transcribe::TUNED_DIR, generate::DENOISED_DIR, generate::GENERATED_DIR, instruments::INSTRUMENTS_DIR]
         .iter()
         .any(|d| track.file.starts_with(d))
     {
@@ -1572,6 +1573,10 @@ pub fn run() {
             generate::denoise_voice_apply,
             generate::generate_start,
             generate::generate_apply,
+            instruments::instrument_track_add,
+            instruments::instrument_set,
+            instruments::instrument_render,
+            instruments::midi_import,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");

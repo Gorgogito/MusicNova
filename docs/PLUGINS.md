@@ -39,7 +39,7 @@ Windows estaba procesando, vuelca su pila con `dbghelp` y termina con código 3.
 | Plugin | Licencia | CLAP | VST3 | Notas |
 |---|---|---|---|---|
 | Surge XT Effects 1.3.4 | GPL-3.0 | ✔ | ✔ | Todas las pruebas, incluido el arrastre en la interfaz. |
-| Surge XT 1.3.4 (sintetizador) | GPL-3.0 | — | — | Es un instrumento: el escaneo lo descarta correctamente. |
+| Surge XT 1.3.4 (sintetizador) | GPL-3.0 | ✔ | ✔ | Como instrumento en pistas de instrumento: un acorde de Do da picos en 261/330/392 Hz y un La3 en 220 Hz; el cambio desde la interfaz regenera la pista en la nota correcta. |
 | Airwindows Consolidated (2026-10-31) | MIT | ✔ | ✔ | Todas. Al cambiar de efecto desde su interfaz cambia la lista de parámetros; se refleja y se guarda. |
 | Dragonfly Hall / Plate / Room Reverb 3.2.10 | GPL-3.0 | ✔ | ✔ | Todas, incluido el arrastre en la interfaz. |
 | Dragonfly Early Reflections 3.2.10 | GPL-3.0 | ✔* | ✔* | *El audio, los parámetros y el estado funcionan, pero su interfaz bloquea el hilo principal (el driver OpenGL espera un sincronismo vertical que no llega). Es un fallo conocido del plugin ([dragonfly-reverb#169](https://github.com/michaelwillis/dragonfly-reverb/issues/169)): también congela REAPER, Audacity, Ableton y Reason. No abras su interfaz; usa los parámetros genéricos. |
@@ -75,4 +75,19 @@ El plugin de prueba (`mn-testplugin`) detecta ahora esos incumplimientos: `stop_
   en otro proceso queda pendiente.
 - `request_restart` de CLAP y `restartComponent` de VST3 no reinician el plugin. Ninguno de los
   probados lo necesitó.
-- No hay compensación de latencia, automatización de parámetros de plugins, instrumentos ni sidechain.
+- No hay automatización de parámetros de plugins.
+- Las pistas de instrumento generan su audio sin conexión (al editar notas o cambiar de
+  instrumento), no en tiempo real: tocar un teclado MIDI en vivo no está soportado.
+
+## Instrumentos, latencia y sidechain
+
+- **Instrumentos:** el escaneo marca como instrumento los CLAP con la característica
+  `instrument` y los VST3 de subcategoría `Instrument` sin `Fx`. Las notas llegan como
+  `clap_event_note` (mezcladas por tiempo con los cambios de parámetro) o por una `IEventList`
+  preasignada en VST3, con el bus de eventos activado y sin buses de entrada de audio.
+  `mn_plugin::render_instrument` genera el audio en bloques con una instancia propia.
+- **Latencia:** se lee con `CLAP_EXT_LATENCY` o `getLatencySamples` y se compensa con una
+  línea de retardo por pista en el motor (las pistas de menos latencia esperan a la mayor),
+  en el metrónomo, en la alineación de las grabaciones y en la exportación.
+- **Sidechain:** solo el compresor integrado; la señal clave es el audio crudo de otra pista
+  (antes de efectos y fader, incluso silenciada).

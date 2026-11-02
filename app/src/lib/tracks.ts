@@ -12,4 +12,5 @@ export const TRACK_KINDS: Record<TrackKind, { label: string; color: string }> = 
   other: { label: 'Otros', color: 'var(--track-other)' },
   generated: { label: 'Generada', color: 'var(--track-generated)' },
   recording: { label: 'Grabación', color: 'var(--track-recording)' },
+  instrument: { label: 'Instrumento', color: 'var(--track-instrument)' },
 }

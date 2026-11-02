@@ -21,7 +21,7 @@ use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComRef, ComWrapper, Interface};
 
 use crate::scan::vst3_binary;
-use crate::{Backend, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
+use crate::{Backend, NoteEvent, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
 
 const AUDIO_MODULE_CLASS: &str = "Audio Module Class";
 
@@ -130,11 +130,9 @@ pub(crate) fn scan(path: &Path) -> Result<Vec<PluginDescriptor>, String> {
             if category != AUDIO_MODULE_CLASS {
                 continue;
             }
-            // Solo efectos (los instrumentos necesitan pistas MIDI).
+            // Efectos e instrumentos (los instrumentos van en pistas de instrumento).
             let parts: Vec<&str> = sub.split('|').collect();
-            if parts.contains(&"Instrument") && !parts.contains(&"Fx") {
-                continue;
-            }
+            let instrument = parts.contains(&"Instrument") && !parts.contains(&"Fx");
             if vendor.is_empty() {
                 vendor = factory_vendor.clone();
             }
@@ -146,6 +144,7 @@ pub(crate) fn scan(path: &Path) -> Result<Vec<PluginDescriptor>, String> {
                 vendor,
                 version,
                 category: sub,
+                instrument,
             });
         }
     }
@@ -540,9 +539,63 @@ impl IParameterChangesTrait for ParamChanges {
     }
 }
 
+/// Lista de eventos de nota del bloque (reservada una vez; solo el hilo de audio).
+struct EventList {
+    events: std::cell::UnsafeCell<Vec<Event>>,
+}
+
+impl Class for EventList {
+    type Interfaces = (IEventList,);
+}
+
+impl EventList {
+    fn new() -> Self {
+        Self { events: std::cell::UnsafeCell::new(Vec::with_capacity(1024)) }
+    }
+
+    /// Sustituye el contenido por las notas del bloque, sin reservar memoria.
+    unsafe fn fill(&self, notes: &[NoteEvent], frames: usize) {
+        let v = &mut *self.events.get();
+        v.clear();
+        for n in notes.iter().take(v.capacity()) {
+            let mut e: Event = std::mem::zeroed();
+            e.busIndex = 0;
+            e.sampleOffset = n.time.min(frames.saturating_sub(1) as u32) as int32;
+            if n.on {
+                e.r#type = Event_::EventTypes_::kNoteOnEvent as uint16;
+                e.__field0.noteOn = NoteOnEvent { channel: 0, pitch: n.key as int16, tuning: 0.0, velocity: n.velocity.clamp(0.0, 1.0), length: 0, noteId: -1 };
+            } else {
+                e.r#type = Event_::EventTypes_::kNoteOffEvent as uint16;
+                e.__field0.noteOff = NoteOffEvent { channel: 0, pitch: n.key as int16, velocity: 0.0, noteId: -1, tuning: 0.0 };
+            }
+            v.push(e);
+        }
+    }
+}
+
+impl IEventListTrait for EventList {
+    unsafe fn getEventCount(&self) -> int32 {
+        (&*self.events.get()).len() as int32
+    }
+    unsafe fn getEvent(&self, index: int32, e: *mut Event) -> tresult {
+        match (&*self.events.get()).get(index.max(0) as usize) {
+            Some(ev) if index >= 0 && !e.is_null() => {
+                *e = *ev;
+                kResultOk
+            }
+            _ => kResultFalse,
+        }
+    }
+    unsafe fn addEvent(&self, _e: *mut Event) -> tresult {
+        // Lista de entrada: el plugin no añade eventos.
+        kResultFalse
+    }
+}
+
 // ---- Instancia --------------------------------------------------------------------
 
 struct Scratch {
+    events: ComWrapper<EventList>,
     changes: ComWrapper<ParamChanges>,
     /// Cambios que informa el propio procesador (medidores, parámetros internos).
     out_changes: ComWrapper<ParamChanges>,
@@ -658,26 +711,32 @@ impl Vst3Plugin {
             let in_dir = BusDirections_::kInput as BusDirection;
             let out_dir = BusDirections_::kOutput as BusDirection;
             let (ic, oc) = (bus_channels(&component, in_dir), bus_channels(&component, out_dir));
-            if ic == 0 || oc == 0 {
+            let event_kind = MediaTypes_::kEvent as MediaType;
+            let instrument = component.getBusCount(event_kind, in_dir) > 0;
+            if oc == 0 || (ic == 0 && !instrument) {
                 let me = Self::partial(component, processor, controller, connection, separate, host, handler, edits_rx, lib, 2, 2);
                 me.shutdown_inner();
-                return Err("el plugin no es un efecto (no tiene entrada y salida de audio)".into());
+                return Err("el plugin no tiene salida de audio o no es ni efecto ni instrumento".into());
             }
+            let (mut in_channels, mut out_channels) = (if ic == 0 { 0 } else { 2 }, 2);
+            let n_in = (ic > 0) as int32;
             let mut ins = [SpeakerArr::kStereo];
             let mut outs = [SpeakerArr::kStereo];
-            let (mut in_channels, mut out_channels) = (2, 2);
-            if processor.setBusArrangements(ins.as_mut_ptr(), 1, outs.as_mut_ptr(), 1) != kResultTrue {
-                in_channels = ic.clamp(1, 2);
+            if processor.setBusArrangements(ins.as_mut_ptr(), n_in, outs.as_mut_ptr(), 1) != kResultTrue {
+                in_channels = ic.clamp(0, 2);
                 out_channels = oc.clamp(1, 2);
                 let mut ins = [if in_channels == 1 { SpeakerArr::kMono } else { SpeakerArr::kStereo }];
                 let mut outs = [if out_channels == 1 { SpeakerArr::kMono } else { SpeakerArr::kStereo }];
-                processor.setBusArrangements(ins.as_mut_ptr(), 1, outs.as_mut_ptr(), 1);
+                processor.setBusArrangements(ins.as_mut_ptr(), n_in, outs.as_mut_ptr(), 1);
             }
             let audio = MediaTypes_::kAudio as MediaType;
             for (dir, count) in [(in_dir, component.getBusCount(audio, in_dir)), (out_dir, component.getBusCount(audio, out_dir))] {
                 for b in 0..count {
                     component.activateBus(audio, dir, b, (b == 0) as TBool);
                 }
+            }
+            if instrument {
+                component.activateBus(event_kind, in_dir, 0, 1);
             }
             let mut setup = ProcessSetup {
                 processMode: ProcessModes_::kRealtime as int32,
@@ -737,6 +796,7 @@ impl Vst3Plugin {
             out_channels,
             processing: AtomicBool::new(false),
             audio: UnsafeCell::new(Scratch {
+                events: ComWrapper::new(EventList::new()),
                 changes: ComWrapper::new(ParamChanges::new()),
                 out_changes: ComWrapper::new(ParamChanges::new()),
                 out_tx,
@@ -929,9 +989,10 @@ impl Backend for Vst3Plugin {
         }
     }
 
-    unsafe fn process(&self, input: [&[f32]; 2], output: [&mut [f32]; 2], params: &[(u32, f64)]) {
+    unsafe fn process(&self, input: [&[f32]; 2], output: [&mut [f32]; 2], params: &[(u32, f64)], notes: &[NoteEvent]) {
         let s = &mut *self.audio.get();
         let n = input[0].len();
+        s.events.fill(notes, n);
         if !self.processing.load(Ordering::Relaxed) {
             self.processor.setProcessing(1);
             self.processing.store(true, Ordering::Relaxed);
@@ -968,19 +1029,24 @@ impl Backend for Vst3Plugin {
             processMode: ProcessModes_::kRealtime as int32,
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as int32,
             numSamples: n as int32,
-            numInputs: 1,
+            numInputs: (self.in_channels > 0) as int32,
             numOutputs: 1,
-            inputs: &mut inputs,
+            inputs: if self.in_channels > 0 { &mut inputs } else { ptr::null_mut() },
             outputs: &mut outputs,
             inputParameterChanges: s.changes.as_com_ref::<IParameterChanges>().unwrap().as_ptr(),
             outputParameterChanges: s.out_changes.as_com_ref::<IParameterChanges>().unwrap().as_ptr(),
-            inputEvents: ptr::null_mut(),
+            inputEvents: s.events.as_com_ref::<IEventList>().unwrap().as_ptr(),
             outputEvents: ptr::null_mut(),
             processContext: &mut s.context,
         };
         if self.processor.process(&mut data) != kResultOk {
-            outl.copy_from_slice(input[0]);
-            outr.copy_from_slice(input[1]);
+            if self.in_channels > 0 {
+                outl.copy_from_slice(input[0]);
+                outr.copy_from_slice(input[1]);
+            } else {
+                outl.fill(0.0);
+                outr.fill(0.0);
+            }
         } else if self.out_channels == 1 {
             outr.copy_from_slice(outl);
         }

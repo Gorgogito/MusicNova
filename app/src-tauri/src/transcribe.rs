@@ -181,7 +181,12 @@ pub fn notes_export_midi(state: State<'_, AppState>, path: String, track_id: Opt
         .filter(|tn| track_id.is_none_or(|id| id == tn.track_id) && !tn.notes.is_empty())
         .filter_map(|tn| {
             let info = project.tracks.iter().find(|x| x.id == tn.track_id)?;
-            Some((info.name.clone(), gm_program(info.kind), tn.notes.as_slice(), tn.mode == DRUMS_MODE))
+            // Pistas de instrumento: el programa del timbre integrado (el del plugin no se conoce).
+            let program = match &info.instrument {
+                Some(mn_core::project::InstrumentSource::Synth { timbre }) => crate::instruments::program_for_timbre(*timbre),
+                _ => gm_program(info.kind),
+            };
+            Some((info.name.clone(), program, tn.notes.as_slice(), tn.mode == DRUMS_MODE))
         })
         .collect();
     if parts.is_empty() {

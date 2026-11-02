@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export type TrackKind =
   | 'mix' | 'vocals' | 'backing_vocals' | 'drums' | 'bass' | 'guitar'
-  | 'piano' | 'other' | 'generated' | 'recording'
+  | 'piano' | 'other' | 'generated' | 'recording' | 'instrument'
 
 export interface Band {
   freq: number
@@ -50,6 +50,8 @@ export interface PluginDescriptor {
   vendor: string
   version: string
   category: string
+  /** Instrumento (recibe notas) en vez de efecto. */
+  instrument?: boolean
 }
 
 export interface PluginCache {
@@ -129,7 +131,16 @@ export interface TrackInfo {
   offset: number
   clips: Clip[]
   automation: AutomationLane[]
+  /** Con qué suena una pista de instrumento. */
+  instrument?: InstrumentSource | null
 }
+
+/** Timbres del sintetizador integrado. */
+export type SynthTimbre = 'keys' | 'bass' | 'lead' | 'drums' | 'pad' | 'pluck'
+
+export type InstrumentSource =
+  | { type: 'synth'; timbre: SynthTimbre }
+  | { type: 'plugin'; plugin: PluginRef }
 
 /** Tramo del audio de una pista en la línea de tiempo (edición no destructiva). */
 export interface Clip {
@@ -573,6 +584,10 @@ export const api = {
   generateStart: (track: GeneratedTrack, caption: string, context: 'audible' | 'original', steps: number, seed: number | null) =>
     invoke<{ job_id: string }>('generate_start', { track, caption, context, steps, seed }),
   generateApply: (track: GeneratedTrack) => invoke<ProjectView>('generate_apply', { track }),
+  instrumentTrackAdd: (name: string, source: InstrumentSource) => invoke<ProjectView>('instrument_track_add', { name, source }),
+  instrumentSet: (trackId: string, source: InstrumentSource) => invoke<TrackView>('instrument_set', { trackId, source }),
+  instrumentRender: (trackId: string) => invoke<TrackView>('instrument_render', { trackId }),
+  midiImport: (path: string) => invoke<ProjectView>('midi_import', { path }),
   inputDevices: () => invoke<InputDeviceInfo[]>('input_devices'),
   inputOpen: (device: string | null, channels: InputChannels) => invoke<InputInfo>('input_open', { device, channels }),
   inputClose: () => invoke<void>('input_close'),

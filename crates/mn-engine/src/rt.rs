@@ -345,6 +345,15 @@ impl RtState {
                     c.set_enabled(index, enabled);
                 }
             }
+            Command::SetData(id, data, clips) => {
+                if let Some(t) = find(&mut self.tracks, id) {
+                    let old_data = std::mem::replace(&mut t.data, data);
+                    let old_clips = std::mem::replace(&mut t.clips, *clips);
+                    t.end = mn_core::mix::clips_end(&t.clips);
+                    self.discard(Garbage::Data(old_data));
+                    self.discard(Garbage::Clips(old_clips));
+                }
+            }
             Command::SetClips(id, clips) => {
                 if let Some(t) = find(&mut self.tracks, id) {
                     let old = std::mem::replace(&mut t.clips, *clips);

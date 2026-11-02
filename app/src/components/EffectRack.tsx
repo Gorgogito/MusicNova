@@ -24,7 +24,8 @@ interface Props {
 /** Cadena de efectos editable: añadir, ordenar, activar, quitar y ajustar. */
 export function EffectRack({ effects, onChange, sidechainSources = [] }: Props) {
   const { cache } = usePlugins()
-  const plugins = cache?.plugins ?? []
+  // Los instrumentos van en pistas de instrumento, no en cadenas de efectos.
+  const plugins = (cache?.plugins ?? []).filter((d) => !d.instrument)
   const update = (i: number, slot: EffectSlot) => onChange(effects.map((s, j) => (j === i ? slot : s)))
   const move = (i: number, d: -1 | 1) => {
     const next = [...effects]

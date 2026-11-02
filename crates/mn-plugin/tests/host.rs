@@ -60,7 +60,7 @@ fn scans_clap_vst3_file_and_bundle() {
     assert_eq!(found.len(), 3, "{found:?}");
 
     let clap = scan_file(&f.clap).unwrap();
-    assert_eq!(clap.len(), 2);
+    assert_eq!(clap.len(), 3);
     assert!(clap.iter().any(|p| p.id == "org.musicnova.test-gain"));
     assert!(clap.iter().any(|p| p.id == "org.musicnova.test-delay"));
     assert_eq!(clap[0].vendor, "MusicNova");
@@ -139,7 +139,7 @@ fn chains_reuse_live_instances_and_sync_state() {
     tmp.set_param(0, -12.0);
     run(&mut PluginProcessor::new(tmp.clone()));
     r.state = tmp.state_base64();
-    let slot = EffectSlot { id: "slot-chain".into(), enabled: true, params: EffectParams::Plugin, plugin: Some(r.clone()) };
+    let slot = EffectSlot { sidechain: None, id: "slot-chain".into(), enabled: true, params: EffectParams::Plugin, plugin: Some(r.clone()) };
 
     // Cadena del motor: crea y registra la instancia en vivo.
     let mut live = Chain::new(std::slice::from_ref(&slot), 48_000);
@@ -169,7 +169,7 @@ fn chains_reuse_live_instances_and_sync_state() {
 #[test]
 fn missing_plugin_is_bypassed_with_error() {
     fixture();
-    let slot = EffectSlot {
+    let slot = EffectSlot { sidechain: None,
         id: "slot-missing".into(),
         enabled: true,
         params: EffectParams::Plugin,
@@ -229,4 +229,35 @@ fn host_follows_threading_and_output_rules() {
         drop(inst); // apagado: stop_processing (CLAP) en un hilo de audio
         assert_eq!(violations(path), 0, "{format:?}: el plugin de prueba detectó incumplimientos (ver stderr)");
     }
+}
+
+/// Pista de instrumento: el sintetizador de prueba toca las notas al render.
+#[test]
+fn renders_notes_with_an_instrument_plugin() {
+    let f = fixture();
+    let found = scan_file(&f.clap).unwrap();
+    let synth = found.iter().find(|d| d.id == "org.musicnova.test-synth").expect("instrumento en el escaneo");
+    assert!(synth.instrument);
+    assert!(found.iter().filter(|d| d.id != "org.musicnova.test-synth").all(|d| !d.instrument));
+    let rate = 48_000;
+    // La4 de 0,1 a 0,6 s y Mi5 de 0,3 a 0,8 s (se solapan).
+    let notes = [(0.1, 0.6, 69u8, 127u8), (0.3, 0.8, 76u8, 100u8)];
+    let audio = mn_plugin::render_instrument(&synth.to_ref(), &notes, rate, 1.0, 0.2).unwrap();
+    assert_eq!(audio.len(), (1.2 * rate as f64) as usize * 2);
+    let left: Vec<f32> = audio.iter().step_by(2).copied().collect();
+    let at = |t: f64| (t * rate as f64) as usize;
+    assert!(left[..at(0.099)].iter().all(|&s| s == 0.0), "silencio antes de la primera nota");
+    // Solo La4: frecuencia por cruces por cero ascendentes.
+    let seg = &left[at(0.12)..at(0.28)];
+    let hz = seg.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / 0.16;
+    assert!((hz - 440.0).abs() < 10.0, "{hz}");
+    // Tras la liberación de la última nota, silencio.
+    assert!(left[at(0.85)..].iter().all(|&s| s.abs() < 1e-6));
+    assert_eq!(mn_test_violations(), 0);
+}
+
+fn mn_test_violations() -> u32 {
+    let lib = unsafe { libloading::Library::new(&fixture().clap) }.unwrap();
+    let f: libloading::Symbol<unsafe extern "C" fn() -> u32> = unsafe { lib.get(b"mn_test_violations") }.unwrap();
+    unsafe { f() }
 }
