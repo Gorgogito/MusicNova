@@ -102,12 +102,26 @@ def simplify_curve(points: list[tuple[float, float]], tol: float) -> list[tuple[
     return [p for p, k in zip(points, keep) if k]
 
 
-def note_bends(start: float, end: float, curve: list[tuple[float, float]]) -> list[list[float]]:
-    """Curva de una nota como puntos [segundos desde el inicio, cents]: mediana
-    de 5 puntos, limitada a ±2 semitonos y simplificada. Vacía si apenas se mueve."""
+# Margen en los bordes de cada nota que no cuenta para su curva en instrumentos
+# pulsados o percutidos (bajo, guitarra, piano): la ventana de análisis (64 ms
+# en CREPE, unos 40 ms en Basic Pitch) mezcla ahí la nota vecina y producía
+# saltos falsos de hasta ±2 semitonos. En la voz no se recorta: sus portamentos
+# al entrar y salir de las notas son reales (recortarlos empeoraba el p90 en
+# Vocadito de 18 a 26 cents).
+BEND_EDGE = {"crepe": 0.035, "contour": 0.02}
+
+
+def note_bends(start: float, end: float, curve: list[tuple[float, float]], edge: float = 0.0) -> list[list[float]]:
+    """Curva de una nota como puntos [segundos desde el inicio, cents]: sin los
+    `edge` segundos de cada borde (si la nota es bastante larga), mediana de 5
+    puntos, limitada a ±2 semitonos y simplificada. Vacía si apenas se mueve."""
     import numpy as np
 
-    pts = [(t, c) for t, c in curve if start - 1e-6 <= t <= end + 1e-6 and np.isfinite(c)]
+    if end - start > 4 * edge:
+        start_in, end_in = start + edge, end - edge
+    else:
+        start_in, end_in = start, end
+    pts = [(t, c) for t, c in curve if start_in - 1e-6 <= t <= end_in + 1e-6 and np.isfinite(c)]
     if len(pts) < 3:
         return []
     t = np.array([p[0] for p in pts])
@@ -241,13 +255,15 @@ class NotesTask(Task):
                     model="full",
                     device=device,
                 )
+            trim = bool(params.get("trim_bend_edges", False))
             for n in notes:
                 curve = None
+                edge = BEND_EDGE["crepe"]
                 if f0 is not None:
                     curve = crepe_curve(f0, PITCH_HOP / PITCH_SR, n["pitch"], n["start"], n["end"])
                 if curve is None:
-                    curve = n["_curve"]
-                bends = note_bends(n["start"], n["end"], curve)
+                    curve, edge = n["_curve"], BEND_EDGE["contour"]
+                bends = note_bends(n["start"], n["end"], curve, edge if trim else 0.0)
                 if bends:
                     n["bends"] = bends
         for n in notes:

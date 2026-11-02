@@ -52,6 +52,13 @@ export function GenerationPanel(props: Props) {
   const job = jobs.job
   const [tasks, setTasks] = useState<TaskInfo[] | null>(null)
   const [models, setModels] = useState<ModelInfo[] | null>(null)
+  // Reloj del tiempo transcurrido mientras hay un trabajo.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!job) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [job])
 
   const refresh = useCallback(() => {
     if (!workerReady) return
@@ -70,13 +77,13 @@ export function GenerationPanel(props: Props) {
   }, [job, refresh])
 
   if (job) {
-    const elapsed = (Date.now() - job.startedAt) / 1000
+    const elapsed = Math.max(0, (now - job.startedAt) / 1000)
     return (
       <div className="panel">
         <div className="panel-row">
           <strong>{GENERATION_LABEL[job.kind]}</strong>
           <span className="muted small">
-            {job.message} · {formatTime(elapsed)}
+            {job.message} · {Math.floor(elapsed / 60)}:{String(Math.floor(elapsed % 60)).padStart(2, '0')}
           </span>
           <button className="btn ghost small" onClick={jobs.cancel} disabled={!job.jobId}>
             <Icon name="x" size={14} /> Cancelar

@@ -15,7 +15,10 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-use crate::transcribe::{add_generated_track, render_track_audio};
+use mn_core::project::TrackKind;
+use mn_fx::loudness;
+
+use crate::transcribe::{add_generated_track_with_gain, render_track_audio};
 use crate::{err, render_premaster, session_snapshot, write_mix_input, AppState, ProjectView};
 
 /// Carpetas de las pistas que genera esta fase (se pueden borrar desde la interfaz).
@@ -52,12 +55,13 @@ fn add_buffer_track(
     rel: String,
     name: String,
     mute_source: Option<Uuid>,
+    gain_db: f32,
 ) -> Result<ProjectView, String> {
     let (dir, _) = session_snapshot(state)?;
     let path = dir.join(&rel);
     std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
     export_audio(&path, buf, ExportFormat::Flac24).map_err(err)?;
-    add_generated_track(state, rel, name, mute_source)
+    add_generated_track_with_gain(state, rel, name, mute_source, gain_db)
 }
 
 // ---- Limpieza de ruido ----------------------------------------------------------------
@@ -75,6 +79,7 @@ pub async fn denoise_steady(app: AppHandle, track_id: Uuid, settings: DenoiseSet
             format!("{DENOISED_DIR}{track_id}.flac"),
             format!("{} · sin ruido", info.name),
             Some(track_id),
+            0.0,
         )
     })
     .await
@@ -127,6 +132,7 @@ pub async fn denoise_voice_apply(app: AppHandle, track_id: Uuid) -> Result<Proje
             format!("{DENOISED_DIR}{track_id}.flac"),
             format!("{} · voz limpia", info.name),
             Some(track_id),
+            0.0,
         )?;
         let _ = std::fs::remove_file(cache);
         let _ = std::fs::remove_file(dir.join("cache").join(format!("denoise_input_{track_id}.wav")));
@@ -193,6 +199,45 @@ pub async fn generate_start(
     state.worker.clone().call("tasks.run", json!({ "task": "generate_stem", "params": params })).await
 }
 
+/// Tipo de pista del proyecto al que corresponde una pista de ACE-Step.
+fn kind_of(track: &str) -> Option<TrackKind> {
+    Some(match track {
+        "drums" | "percussion" => TrackKind::Drums,
+        "bass" => TrackKind::Bass,
+        "guitar" => TrackKind::Guitar,
+        "keyboard" => TrackKind::Piano,
+        "vocals" => TrackKind::Vocals,
+        "backing_vocals" => TrackKind::BackingVocals,
+        "strings" | "synth" | "brass" | "woodwinds" | "fx" => TrackKind::Other,
+        _ => return None,
+    })
+}
+
+/// Volumen inicial (dB) de una pista generada: ACE-Step normaliza su salida a
+/// −1 dBFS y, sumada a los stems, la mezcla saturaba. Se iguala su sonoridad
+/// integrada a la de la pista del mismo tipo (la que sustituye, aunque esté
+/// silenciada) o, si no hay, se deja 6 LU por debajo de la mezcla original.
+fn matched_gain(state: &AppState, generated: &AudioBuffer, track: &str) -> Result<f32, String> {
+    let (_, project) = session_snapshot(state)?;
+    let lufs = |b: &AudioBuffer| loudness::measure(&b.data, b.sample_rate).integrated;
+    let gen = lufs(generated);
+    if !gen.is_finite() {
+        return Ok(0.0);
+    }
+    let same = kind_of(track).and_then(|k| project.tracks.iter().find(|t| t.kind == k));
+    let target = match same {
+        Some(t) => {
+            let (buf, info) = render_track_audio(state, t.id)?;
+            lufs(&buf) + info.gain_db as f64
+        }
+        None => match project.tracks.iter().find(|t| t.kind == TrackKind::Mix) {
+            Some(m) => lufs(&render_track_audio(state, m.id)?.0) - 6.0,
+            None => return Ok(0.0),
+        },
+    };
+    Ok(if target.is_finite() { (target - gen).clamp(-24.0, 6.0) as f32 } else { 0.0 })
+}
+
 /// Añade la pista generada al proyecto (cada generación es una pista nueva).
 #[tauri::command]
 pub async fn generate_apply(app: AppHandle, track: String) -> Result<ProjectView, String> {
@@ -205,12 +250,19 @@ pub async fn generate_apply(app: AppHandle, track: String) -> Result<ProjectView
         let rate = state.engine()?.sample_rate();
         let buf = audio::resample(&buf, rate).map_err(err)?;
         let id = Uuid::new_v4().simple().to_string();
+        let gain = matched_gain(&state, &buf, &track)?;
+        // Cada generación se distingue por su número («Batería · generado 2»).
+        let (_, project) = session_snapshot(&state)?;
+        let base = format!("{label} · generado");
+        let taken = |n: &str| project.tracks.iter().any(|t| t.name == n);
+        let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap();
         let view = add_buffer_track(
             &state,
             &buf,
             format!("{GENERATED_DIR}{track}-{}.flac", &id[..8]),
-            format!("{label} · generado"),
+            name,
             None,
+            gain,
         )?;
         let _ = std::fs::remove_file(cache);
         Ok(view)

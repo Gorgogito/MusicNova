@@ -170,3 +170,37 @@ def test_install_extracts_zip_tools(tmp_path):
         jm.shutdown()
     finally:
         httpd.shutdown()
+
+
+def test_job_importing_native_modules_does_not_wait_for_stdin(tmp_path):
+    """Regresión: en Windows un trabajo que cargaba numpy en su hilo se quedaba
+    parado mientras el hilo principal esperaba la siguiente línea de stdin."""
+    import numpy as np
+    import soundfile as sf
+
+    wav = tmp_path / "golpes.wav"
+    sr = 44_100
+    y = np.zeros(sr * 2, dtype=np.float32)
+    for k in range(4):
+        y[int(k * 0.5 * sr) : int(k * 0.5 * sr) + 400] = np.hanning(400)
+    sf.write(wav, y, sr)
+    env = {**__import__("os").environ, "MUSICNOVA_DATA": str(tmp_path), "PYTHONPATH": str(ROOT)}
+    p = subprocess.Popen(
+        [sys.executable, "-u", "-m", "musicnova_ai"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=ROOT,
+    )
+    lines: list[dict] = []
+    reader = threading.Thread(target=lambda: [lines.append(json.loads(l)) for l in p.stdout], daemon=True)
+    reader.start()
+    try:
+        request = {"id": 1, "method": "tasks.run", "params": {"task": "transcribe_drums", "params": {"input": str(wav)}}}
+        p.stdin.write((json.dumps(request) + "\n").encode())
+        p.stdin.flush()
+        # No se envía nada más: el trabajo tiene que acabar solo.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not any(m.get("event") in ("job.done", "job.failed") for m in lines):
+            time.sleep(0.2)
+        events = [m.get("event") for m in lines]
+        assert "job.done" in events, events
+    finally:
+        p.kill()

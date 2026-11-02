@@ -178,6 +178,7 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
 
         <article className="card">
           <h3>Hardware</h3>
+          {!sys && worker?.state === 'ready' && <span className="small muted">Comprobando el equipo…</span>}
           <dl>
             <dt>CPU</dt>
             <dd>{sys ? `${sys.cpu_count} hilos · ${sys.machine}` : '—'}</dd>
@@ -185,9 +186,11 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
             <dd>{formatBytes(sys?.ram_bytes)}</dd>
             <dt>GPU</dt>
             <dd>
-              {sys?.gpus.length
-                ? sys.gpus.map((g) => `${g.name} (${formatBytes(g.vram_bytes)})`).join(', ')
-                : 'No se detectó GPU NVIDIA'}
+              {!sys
+                ? '—'
+                : sys.gpus.length
+                  ? sys.gpus.map((g) => `${g.name} (${formatBytes(g.vram_bytes)})`).join(', ')
+                  : 'No se detectó GPU NVIDIA'}
             </dd>
             <dt>Aceleración</dt>
             <dd>{sys ? accel : '—'}</dd>

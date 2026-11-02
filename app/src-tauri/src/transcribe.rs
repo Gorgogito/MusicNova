@@ -84,7 +84,13 @@ pub async fn notes_start(
     let rate = if drums { DRUMS_RATE } else { NOTES_RATE };
     let input = write_track_input(&app, track_id, format!("notes_input_{track_id}.wav"), rate).await?;
     let state = app.state::<AppState>();
-    let (dir, _) = session_snapshot(&state)?;
+    let (dir, project) = session_snapshot(&state)?;
+    // Instrumentos pulsados o percutidos: sin deslizamientos reales en los bordes de las notas.
+    let plucked = project
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .is_some_and(|t| matches!(t.kind, TrackKind::Bass | TrackKind::Guitar | TrackKind::Piano | TrackKind::Other));
     // Sensibilidad 0–1 (0,5 = valores ajustados): más alta, más notas.
     let s = sensitivity.unwrap_or(0.5).clamp(0.0, 1.0);
     if drums {
@@ -102,6 +108,7 @@ pub async fn notes_start(
         "mode": if mono { "mono" } else { "poly" },
         "onset_threshold": onset,
         "frame_threshold": frame,
+        "trim_bend_edges": plucked,
         "device": device.unwrap_or_else(|| "auto".into()),
     });
     state.worker.clone().call("tasks.run", json!({ "task": "transcribe_notes", "params": params })).await
@@ -190,6 +197,17 @@ pub fn notes_export_midi(state: State<'_, AppState>, path: String, track_id: Opt
 
 /// Añade una pista generada al proyecto y lo recarga en el motor.
 pub(crate) fn add_generated_track(state: &AppState, rel: String, name: String, mute_source: Option<Uuid>) -> Result<ProjectView, String> {
+    add_generated_track_with_gain(state, rel, name, mute_source, 0.0)
+}
+
+/// Como `add_generated_track`, con el volumen inicial de la pista nueva (dB).
+pub(crate) fn add_generated_track_with_gain(
+    state: &AppState,
+    rel: String,
+    name: String,
+    mute_source: Option<Uuid>,
+    gain_db: f32,
+) -> Result<ProjectView, String> {
     let engine = state.engine()?;
     let (dir, mut project) = session_snapshot(state)?;
     let before = engine.state();
@@ -200,7 +218,9 @@ pub(crate) fn add_generated_track(state: &AppState, rel: String, name: String, m
             t.mute = true;
         }
     }
-    project.tracks.push(TrackInfo::new(name, TrackKind::Generated, rel));
+    let mut track = TrackInfo::new(name, TrackKind::Generated, rel);
+    track.gain_db = gain_db;
+    project.tracks.push(track);
     project.save(&dir).map_err(err)?;
     let view = load_into_engine(state, dir, project)?;
     engine.seek(before.position_frames).map_err(err)?;

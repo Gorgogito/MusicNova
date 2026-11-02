@@ -88,7 +88,9 @@ export const NotesLane = memo(function NotesLane({
       if (mode === 'resize') {
         n = resizeNote(orig, snap(orig.end + dx / pxPerSec, pxPerSec, ev.altKey))
       } else {
-        const start = snap(orig.start + dx / pxPerSec, pxPerSec, ev.altKey)
+        // Un arrastre vertical no mueve la nota en el tiempo (el ajuste a la
+        // rejilla la desplazaba aunque no se moviera en horizontal).
+        const start = Math.abs(dx) < 3 ? orig.start : snap(orig.start + dx / pxPerSec, pxPerSec, ev.altKey)
         n = moveNote(orig, start, orig.pitch - Math.round(dy / rowH))
       }
       last = notes.map((x, i) => (i === index ? n : x))

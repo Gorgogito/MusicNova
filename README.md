@@ -22,6 +22,7 @@ docs/PLUGINS.md Compatibilidad con plugins y sonda de pruebas
 docs/TRANSCRIPCION.md  Medidas de transcripción, afinación e instrumentos con audio real
                        (scripts y descarga de datos en ai-worker/eval/)
 docs/GENERACION.md     Limpieza de ruido y acompañamientos con IA: método y medidas
+docs/PRUEBAS_UI.md     Pruebas de la interfaz con ratón (CDP de WebView2) y canciones reales
 ```
 
 ## Desarrollo (Windows)

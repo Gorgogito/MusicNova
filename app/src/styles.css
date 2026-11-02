@@ -195,6 +195,11 @@ nav {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 20px;
+  min-width: 0;
+}
+.studio .view-header > div:first-child {
+  flex: 0 0 auto;
+  max-width: 260px;
 }
 
 .busy-bar {
@@ -234,6 +239,8 @@ nav {
   font-weight: 600;
 }
 .btn.primary:hover:not(:disabled) {
+  /* La regla genérica de :hover (más específica que .btn.primary) le quitaba el degradado. */
+  background: var(--accent-grad);
   filter: brightness(1.08);
 }
 .btn.ghost {
@@ -396,10 +403,20 @@ nav {
 .lane-buttons {
   display: flex;
   gap: 4px;
+  /* Hueco para cinco botones: M, S, FX y A quedan en la misma columna en todas
+     las pistas aunque alguna tenga además N (piano roll) o borrar. */
+  min-width: calc(5 * 26px + 4 * 4px);
+  justify-content: flex-start;
 }
 .toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 26px;
   height: 22px;
+  padding: 0;
+  line-height: 1;
+  white-space: nowrap;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elev-2);
@@ -689,7 +706,13 @@ dd {
 /* ---------- Paneles de herramientas ---------- */
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
+}
+.toolbar .btn {
+  white-space: nowrap;
 }
 .btn.active {
   border-color: var(--accent);
@@ -973,6 +996,7 @@ select.compact {
   gap: 4px;
 }
 .chord-big {
+  user-select: none;
   font-size: 40px;
   font-weight: 700;
   line-height: 1;

@@ -80,9 +80,28 @@ def build_server(out: io.TextIOBase, inp: io.TextIOBase) -> tuple[Server, JobMan
     return server, jobs
 
 
+def _private_stdin() -> io.TextIOBase:
+    """Protocolo por un duplicado de stdin, con el stdin del proceso apuntando a NUL.
+
+    En Windows, mientras un hilo espera en ReadFile sobre la tubería de stdin,
+    GetFileType sobre ese mismo manejador se bloquea, y la inicialización de
+    algunas DLL (numpy, torch, CUDA…) lo consulta al cargarse: un trabajo que
+    importaba numpy en su hilo se quedaba parado hasta la siguiente petición.
+    Con el manejador estándar en NUL, esas consultas no tocan la tubería."""
+    import os
+
+    fd = os.dup(sys.stdin.fileno())
+    if os.name == "nt":
+        nul = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(nul, 0)  # el CRT actualiza también el manejador estándar del proceso
+        os.close(nul)
+        sys.stdin = open(os.devnull, encoding="utf-8")
+    return io.TextIOWrapper(os.fdopen(fd, "rb", buffering=0), encoding="utf-8")
+
+
 def main() -> None:
     proto_out = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", newline="\n", line_buffering=True)
-    proto_in = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8")
+    proto_in = _private_stdin()
     # Las bibliotecas que impriman en stdout no deben corromper el protocolo.
     sys.stdout = sys.stderr
     server, jobs = build_server(proto_out, proto_in)
