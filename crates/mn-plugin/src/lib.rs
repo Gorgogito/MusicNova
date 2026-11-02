@@ -119,6 +119,10 @@ pub(crate) trait Backend: Send + Sync {
     unsafe fn process(&self, input: [&[f32]; 2], output: [&mut [f32]; 2], params: &[(u32, f64)]);
     /// Audio.
     fn reset(&self);
+    /// Principal: latencia que añade el plugin (frames), consultada tras activarlo.
+    fn latency(&self) -> u32 {
+        0
+    }
     /// Principal: detiene, desactiva y destruye el plugin.
     fn shutdown(&self);
 }
@@ -183,6 +187,8 @@ pub struct Instance {
     pub sample_rate: u32,
     /// Efecto del proyecto al que pertenece (solo instancias del motor).
     pub slot_id: Option<String>,
+    /// Latencia que declaró el plugin al activarse (frames).
+    pub latency: u32,
     backend: Option<Arc<dyn Backend>>,
     queue_tx: Mutex<rtrb::Producer<(u32, f64)>>,
     queue_rx: Mutex<rtrb::Consumer<(u32, f64)>>,
@@ -213,11 +219,16 @@ impl Instance {
                 eprintln!("[mn-plugin] {} no aceptó su estado guardado", plugin.name);
             }
         }
+        let latency = {
+            let b = backend.clone();
+            on_main(move || b.latency())
+        };
         let (tx, rx) = rtrb::RingBuffer::new(1024);
         Ok(Arc::new(Instance {
             plugin: plugin.clone(),
             sample_rate,
             slot_id: None,
+            latency,
             backend: Some(backend),
             queue_tx: Mutex::new(tx),
             queue_rx: Mutex::new(rx),
@@ -370,6 +381,10 @@ impl Processor for PluginProcessor {
 
     fn set_params(&mut self, params: &EffectParams) -> bool {
         matches!(params, EffectParams::Plugin)
+    }
+
+    fn latency(&self) -> usize {
+        self.inst.latency as usize
     }
 }
 

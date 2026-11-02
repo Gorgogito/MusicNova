@@ -368,6 +368,11 @@ pub trait Processor: Send {
     /// Aplica parámetros nuevos sin reservar memoria. Devuelve `false` si son
     /// de otro tipo de efecto.
     fn set_params(&mut self, params: &EffectParams) -> bool;
+    /// Retardo que introduce (frames): lo compensa el anfitrión para que las
+    /// pistas sigan alineadas.
+    fn latency(&self) -> usize {
+        0
+    }
 }
 
 /// Crea el procesador de un efecto (reserva memoria: fuera del hilo de audio).
@@ -402,6 +407,11 @@ impl Chain {
 
     pub fn is_empty(&self) -> bool {
         !self.slots.iter().any(|(on, _)| *on)
+    }
+
+    /// Latencia total de los efectos activos (frames).
+    pub fn latency(&self) -> usize {
+        self.slots.iter().filter(|(on, _)| *on).map(|(_, p)| p.latency()).sum()
     }
 
     pub fn process(&mut self, buf: &mut [f32]) {

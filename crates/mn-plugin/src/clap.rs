@@ -16,7 +16,7 @@ use clap_sys::events::{
 };
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS};
 use clap_sys::ext::gui::{clap_host_gui, clap_plugin_gui, clap_window, clap_window_handle, CLAP_EXT_GUI, CLAP_WINDOW_API_WIN32};
-use clap_sys::ext::latency::{clap_host_latency, CLAP_EXT_LATENCY};
+use clap_sys::ext::latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::log::{clap_host_log, clap_log_severity, CLAP_EXT_LOG};
 use clap_sys::ext::params::{
     clap_host_params, clap_param_clear_flags, clap_param_info, clap_param_rescan_flags, clap_plugin_params, CLAP_EXT_PARAMS,
@@ -609,6 +609,10 @@ impl Backend for ClapPlugin {
         if let Some(f) = unsafe { (*self.plugin).reset } {
             unsafe { f(self.plugin) };
         }
+    }
+
+    fn latency(&self) -> u32 {
+        unsafe { ext::<clap_plugin_latency>(self.plugin, CLAP_EXT_LATENCY).and_then(|l| l.get).map_or(0, |get| get(self.plugin)) }
     }
 
     fn shutdown(&self) {

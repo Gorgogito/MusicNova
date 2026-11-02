@@ -60,8 +60,9 @@ fn scans_clap_vst3_file_and_bundle() {
     assert_eq!(found.len(), 3, "{found:?}");
 
     let clap = scan_file(&f.clap).unwrap();
-    assert_eq!(clap.len(), 1);
-    assert_eq!(clap[0].id, "org.musicnova.test-gain");
+    assert_eq!(clap.len(), 2);
+    assert!(clap.iter().any(|p| p.id == "org.musicnova.test-gain"));
+    assert!(clap.iter().any(|p| p.id == "org.musicnova.test-delay"));
     assert_eq!(clap[0].vendor, "MusicNova");
     assert!(clap[0].category.contains("audio-effect"));
 

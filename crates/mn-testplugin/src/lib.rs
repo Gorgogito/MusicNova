@@ -19,6 +19,7 @@ use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{clap_event_header, clap_event_param_value, clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE};
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_STEREO};
 use clap_sys::ext::gui::{clap_plugin_gui, clap_window, CLAP_EXT_GUI, CLAP_WINDOW_API_WIN32};
+use clap_sys::ext::latency::{clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::params::{clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::ext::thread_check::{clap_host_thread_check, CLAP_EXT_THREAD_CHECK};
@@ -31,6 +32,10 @@ use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 
 pub const CLAP_ID: &CStr = c"org.musicnova.test-gain";
+/// Segundo efecto: retrasa la señal `DELAY_FRAMES` y lo declara como latencia
+/// (para probar la compensación de latencia del anfitrión).
+pub const CLAP_DELAY_ID: &CStr = c"org.musicnova.test-delay";
+pub const DELAY_FRAMES: usize = 1000;
 
 /// Incumplimientos de los estándares que el plugin detecta en el anfitrión
 /// (función llamada en un hilo indebido, falta de una interfaz obligatoria…).
@@ -54,6 +59,19 @@ struct Features([*const c_char; 3]);
 unsafe impl Sync for Features {}
 static FEATURES: Features = Features([c"audio-effect".as_ptr(), c"utility".as_ptr(), ptr::null()]);
 
+static DESC_DELAY: SyncDesc = SyncDesc(clap_plugin_descriptor {
+    clap_version: CLAP_VERSION,
+    id: CLAP_DELAY_ID.as_ptr(),
+    name: c"MusicNova Test Delay".as_ptr(),
+    vendor: c"MusicNova".as_ptr(),
+    url: c"".as_ptr(),
+    manual_url: c"".as_ptr(),
+    support_url: c"".as_ptr(),
+    version: c"1.0.0".as_ptr(),
+    description: c"Retardo fijo con latencia declarada".as_ptr(),
+    features: FEATURES.0.as_ptr(),
+});
+
 static DESC: SyncDesc = SyncDesc(clap_plugin_descriptor {
     clap_version: CLAP_VERSION,
     id: CLAP_ID.as_ptr(),
@@ -76,6 +94,9 @@ struct Plugin {
     gain_db: AtomicU64,
     invert: AtomicBool,
     gui: Mutex<Option<isize>>,
+    /// Retardo en frames (0 en la ganancia) y su memoria, solo del hilo de audio.
+    delay: usize,
+    ring: std::cell::UnsafeCell<(Vec<[f32; 2]>, usize)>,
 }
 
 impl Plugin {
@@ -159,7 +180,24 @@ unsafe extern "C" fn process(p: *const clap_plugin, process: *const clap_process
     let inp: &clap_audio_buffer = &*pr.audio_inputs;
     let out: &clap_audio_buffer = &*pr.audio_outputs;
     let n = pr.frames_count as usize;
-    for ch in 0..out.channel_count.min(inp.channel_count) as usize {
+    let channels = out.channel_count.min(inp.channel_count) as usize;
+    if me.delay > 0 {
+        let (ring, pos) = &mut *me.ring.get();
+        for k in 0..n {
+            let mut cur = [0.0f32; 2];
+            for ch in 0..channels.min(2) {
+                cur[ch] = *(*inp.data32.add(ch)).add(k);
+            }
+            let old = ring[*pos];
+            ring[*pos] = cur;
+            *pos = (*pos + 1) % ring.len();
+            for ch in 0..channels.min(2) {
+                *(*out.data32.add(ch)).add(k) = old[ch] * g;
+            }
+        }
+        return CLAP_PROCESS_CONTINUE;
+    }
+    for ch in 0..channels {
         let i = std::slice::from_raw_parts(*inp.data32.add(ch), n);
         let o = std::slice::from_raw_parts_mut(*out.data32.add(ch), n);
         for k in 0..n {
@@ -391,7 +429,15 @@ static GUI: clap_plugin_gui = clap_plugin_gui {
     hide: Some(gui_hide),
 };
 
-unsafe extern "C" fn get_extension(_p: *const clap_plugin, id: *const c_char) -> *const c_void {
+unsafe extern "C" fn latency_get(p: *const clap_plugin) -> u32 {
+    Plugin::from(p).delay as u32
+}
+static LATENCY: clap_plugin_latency = clap_plugin_latency { get: Some(latency_get) };
+
+unsafe extern "C" fn get_extension(p: *const clap_plugin, id: *const c_char) -> *const c_void {
+    if CStr::from_ptr(id) == CLAP_EXT_LATENCY && Plugin::from(p).delay > 0 {
+        return &LATENCY as *const _ as *const c_void;
+    }
     let id = CStr::from_ptr(id);
     if id == CLAP_EXT_PARAMS {
         &PARAMS as *const _ as *const c_void
@@ -410,22 +456,27 @@ unsafe extern "C" fn on_main_thread(_p: *const clap_plugin) {}
 // ---- Fábrica y punto de entrada --------------------------------------------------
 
 unsafe extern "C" fn factory_count(_f: *const clap_plugin_factory) -> u32 {
-    1
+    2
 }
 unsafe extern "C" fn factory_descriptor(_f: *const clap_plugin_factory, index: u32) -> *const clap_plugin_descriptor {
-    if index == 0 {
-        &DESC.0
-    } else {
-        ptr::null()
+    match index {
+        0 => &DESC.0,
+        1 => &DESC_DELAY.0,
+        _ => ptr::null(),
     }
 }
 unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const clap_host, id: *const c_char) -> *const clap_plugin {
-    if CStr::from_ptr(id) != CLAP_ID {
+    let id = CStr::from_ptr(id);
+    let (desc, delay) = if id == CLAP_ID {
+        (&DESC.0, 0)
+    } else if id == CLAP_DELAY_ID {
+        (&DESC_DELAY.0, DELAY_FRAMES)
+    } else {
         return ptr::null();
-    }
+    };
     let me = Box::into_raw(Box::new(Plugin {
         plugin: clap_plugin {
-            desc: &DESC.0,
+            desc,
             plugin_data: ptr::null_mut(),
             init: Some(init),
             destroy: Some(destroy),
@@ -442,6 +493,8 @@ unsafe extern "C" fn factory_create(_f: *const clap_plugin_factory, host: *const
         gain_db: AtomicU64::new(0f64.to_bits()),
         invert: AtomicBool::new(false),
         gui: Mutex::new(None),
+        delay,
+        ring: std::cell::UnsafeCell::new((vec![[0.0; 2]; delay.max(1)], 0)),
     }));
     (*me).plugin.plugin_data = me as *mut c_void;
     &(*me).plugin

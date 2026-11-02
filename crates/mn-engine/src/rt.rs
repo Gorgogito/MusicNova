@@ -95,6 +95,8 @@ pub struct RtState {
     /// Audio de una pista para procesar su cadena de efectos.
     track_buf: Vec<f32>,
     master_chain: Option<Box<Chain>>,
+    /// Latencia compensada entre pistas (frames): la de la pista con más latencia.
+    pdc_tracks: usize,
     master_automation: Option<Box<mn_core::automation::ChannelAutomation>>,
     meter: LoudnessMeter,
 
@@ -151,6 +153,7 @@ impl RtState {
             src_pos: vec![u64::MAX; MAX_IN_FRAMES],
             track_buf: vec![0.0; MAX_IN_FRAMES * 2],
             master_chain: None,
+            pdc_tracks: 0,
             master_automation: None,
             meter: LoudnessMeter::new(sample_rate),
             free_run: false,
@@ -383,6 +386,12 @@ impl RtState {
         }
     }
 
+    /// Retardo total de la música por los efectos: la pista con más latencia
+    /// más el bus máster (frames).
+    pub(crate) fn output_latency(&self) -> usize {
+        self.pdc_tracks + self.master_chain.as_deref().map_or(0, Chain::latency)
+    }
+
     fn chain_mut(&mut self, target: Option<u64>) -> Option<&mut Chain> {
         match target {
             None => self.master_chain.as_deref_mut(),
@@ -433,8 +442,17 @@ impl RtState {
             let last = src.iter().rposition(|&p| p != u64::MAX).unwrap_or(i);
             (src[i], src[last] + 1)
         });
+        // Compensación de latencia: cada pista se retrasa lo que le falta para
+        // llegar a la de la pista con más latencia (también las silenciadas, para
+        // que la alineación no cambie al silenciar).
+        let max_lat = self.tracks.iter().map(|t| t.latency()).max().unwrap_or(0);
+        self.pdc_tracks = max_lat;
         for t in &mut self.tracks {
+            let comp = max_lat - t.latency();
             if t.mute || (any_solo && !t.solo) {
+                if comp > 0 {
+                    t.delay_silence(frames);
+                }
                 continue;
             }
             track_buf.fill(0.0);
@@ -446,6 +464,7 @@ impl RtState {
                 }
                 chain.process(track_buf);
             }
+            crate::delay_line(&mut t.pdc, &mut t.pdc_pos, track_buf, comp);
             let out = &mut out[..frames * 2];
             match auto.filter(|(a, _)| a.has_gain()) {
                 Some((a, (p0, p1))) => {
@@ -469,7 +488,9 @@ impl RtState {
         }
         if self.announce_start {
             self.announce_start = false;
-            self.shared.play_start.store(self.output_clock, self.position);
+            // Lo que se lee ahora suena `output_latency` frames después (efectos con
+            // latencia): la grabación alinea las tomas con ese instante.
+            self.shared.play_start.store(self.output_clock + self.output_latency() as u64, self.position);
         }
         let delay = self.stretch_delay_out();
         if !self.stretching {
@@ -477,7 +498,7 @@ impl RtState {
             for k in 0..self.block_beats_len {
                 let (f, accent) = self.block_beats[k];
                 if self.metronome_on {
-                    self.push_click(self.output_clock + f as u64, ClickKind::beat(accent));
+                    self.push_click(self.output_clock + f as u64 + self.output_latency() as u64, ClickKind::beat(accent));
                 }
             }
         } else {
@@ -492,7 +513,7 @@ impl RtState {
                 if self.metronome_on {
                     let offset = if input > 0 { (f as f64 / input as f64 * n as f64) as u64 } else { 0 };
                     // Los golpes se retrasan lo mismo que el audio estirado.
-                    self.push_click(self.output_clock + offset + delay, ClickKind::beat(accent));
+                    self.push_click(self.output_clock + offset + delay + self.output_latency() as u64, ClickKind::beat(accent));
                 }
             }
         }

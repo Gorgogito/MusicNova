@@ -69,11 +69,49 @@ pub(crate) struct EngineTrack {
     gain_r: f32,
     chain: Option<Box<Chain>>,
     automation: Option<Box<ChannelAutomation>>,
+    /// Línea de retardo para la compensación de latencia (reservada al crear la pista).
+    pdc: Vec<[f32; 2]>,
+    pdc_pos: usize,
+}
+
+/// Latencia máxima que se compensa (frames; ≈2,7 s a 48 kHz).
+pub(crate) const PDC_MAX: usize = 1 << 17;
+
+/// Retarda `buf` (estéreo entrelazado) `delay` frames con la línea circular `line`.
+pub(crate) fn delay_line(line: &mut [[f32; 2]], pos: &mut usize, buf: &mut [f32], delay: usize) {
+    let len = line.len();
+    if delay == 0 || len == 0 {
+        return;
+    }
+    let delay = delay.min(len - 1);
+    for f in buf.as_chunks_mut::<2>().0 {
+        line[*pos] = *f;
+        *f = line[(*pos + len - delay) % len];
+        *pos = (*pos + 1) % len;
+    }
 }
 
 impl EngineTrack {
     fn end(&self) -> u64 {
         self.end
+    }
+
+    /// Latencia de los efectos de la pista (frames).
+    pub(crate) fn latency(&self) -> usize {
+        self.chain.as_deref().map_or(0, Chain::latency).min(PDC_MAX - 1)
+    }
+
+
+    /// Hace avanzar la línea de retardo con silencio (pista silenciada).
+    pub(crate) fn delay_silence(&mut self, frames: usize) {
+        let len = self.pdc.len();
+        if len == 0 {
+            return;
+        }
+        for _ in 0..frames {
+            self.pdc[self.pdc_pos] = [0.0; 2];
+            self.pdc_pos = (self.pdc_pos + 1) % len;
+        }
     }
 
     fn update_gains(&mut self) {
@@ -336,6 +374,8 @@ impl Engine {
             gain_r: 1.0,
             chain: None,
             automation: None,
+            pdc: vec![[0.0; 2]; PDC_MAX],
+            pdc_pos: 0,
         });
         t.update_gains();
         self.send(Command::AddTrack(t))?;
@@ -736,6 +776,8 @@ mod tests {
             gain_r: 1.0,
             chain: None,
             automation: None,
+            pdc: vec![[0.0; 2]; PDC_MAX],
+            pdc_pos: 0,
         });
         t.update_gains();
         t

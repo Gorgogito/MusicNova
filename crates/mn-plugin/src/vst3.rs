@@ -999,6 +999,10 @@ impl Backend for Vst3Plugin {
         }
     }
 
+    fn latency(&self) -> u32 {
+        unsafe { self.processor.getLatencySamples() }
+    }
+
     fn shutdown(&self) {
         self.shutdown_inner();
     }

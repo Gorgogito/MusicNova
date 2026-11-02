@@ -154,37 +154,67 @@ pub fn mixdown(
         let (fader, pan) = (db_to_gain(t.gain_db), t.pan);
         let (gl, gr) = balance_gains(fader, t.pan);
         let mut chain = (!t.effects.is_empty()).then(|| Chain::new_offline(t.effects, sample_rate));
-        // Se procesa toda la longitud de la mezcla para no cortar colas de reverb o delay.
-        for (start, out) in (0..len).step_by(BLOCK * 2).zip(data.chunks_mut(BLOCK * 2)) {
-            let n = out.len();
-            block[..n].fill(0.0);
-            for (k, p) in pos[..n / 2].iter_mut().enumerate() {
-                *p = (start / 2 + k) as u64;
+        // Compensación de latencia: la cadena se procesa `lat` frames más allá
+        // del final y su salida se adelanta `lat` frames, así todas las pistas
+        // quedan alineadas sin retrasar ninguna.
+        let lat = chain.as_ref().map_or(0, |c| c.latency());
+        let frames = len / 2;
+        let total = frames + lat;
+        let mut aligned = vec![0.0f32; len];
+        let mut start = 0;
+        while start < total {
+            let n = BLOCK.min(total - start);
+            block[..n * 2].fill(0.0);
+            for (k, p) in pos[..n].iter_mut().enumerate() {
+                *p = (start + k) as u64;
             }
-            render_clips(t.data, t.clips, &pos[..n / 2], &mut block[..n]);
-            let (f0, f1) = ((start / 2) as u64, ((start + n) / 2) as u64);
+            render_clips(t.data, t.clips, &pos[..n], &mut block[..n * 2]);
             if let Some(c) = chain.as_mut() {
                 if let Some(a) = t.automation {
-                    a.apply_effects(c, f0);
+                    a.apply_effects(c, start as u64);
                 }
-                c.process(&mut block[..n]);
+                c.process(&mut block[..n * 2]);
             }
+            // Frame procesado `start + k` → posición `start + k − lat`.
+            let from = lat.saturating_sub(start);
+            for k in from..n {
+                let dst = start + k - lat;
+                if dst >= frames {
+                    break;
+                }
+                aligned[dst * 2] = block[k * 2];
+                aligned[dst * 2 + 1] = block[k * 2 + 1];
+            }
+            start += n;
+        }
+        // Volumen, panorama y automatización sobre la señal ya alineada.
+        for (start, out) in (0..len).step_by(BLOCK * 2).zip(data.chunks_mut(BLOCK * 2)) {
+            let n = out.len();
+            let (f0, f1) = ((start / 2) as u64, ((start + n) / 2) as u64);
+            let src = &aligned[start..start + n];
             match t.automation.filter(|a| a.has_gain()) {
-                Some(a) => mix_ramp(out, &block[..n], a.gains(f0, fader, pan), a.gains(f1, fader, pan)),
-                None => mix_ramp(out, &block[..n], (gl, gr), (gl, gr)),
+                Some(a) => mix_ramp(out, src, a.gains(f0, fader, pan), a.gains(f1, fader, pan)),
+                None => mix_ramp(out, src, (gl, gr), (gl, gr)),
             }
         }
     }
     let mut chain = (!master.effects.is_empty()).then(|| Chain::new_offline(&master.effects, sample_rate));
     let g = db_to_gain(master.gain_db);
-    for (b, chunk) in data.chunks_mut(BLOCK * 2).enumerate() {
-        let f0 = (b * BLOCK) as u64;
-        if let Some(c) = chain.as_mut() {
+    if let Some(c) = chain.as_mut() {
+        // Igual que en las pistas: se procesa la latencia del máster de más y se adelanta.
+        let lat = c.latency();
+        data.resize(len + lat * 2, 0.0);
+        for (b, chunk) in data.chunks_mut(BLOCK * 2).enumerate() {
             if let Some(a) = master_automation {
-                a.apply_effects(c, f0);
+                a.apply_effects(c, (b * BLOCK) as u64);
             }
             c.process(chunk);
         }
+        data.drain(..lat * 2);
+        data.truncate(len);
+    }
+    for (b, chunk) in data.chunks_mut(BLOCK * 2).enumerate() {
+        let f0 = (b * BLOCK) as u64;
         let (g0, g1) = match master_automation {
             Some(a) => (a.master_gain(f0, g), a.master_gain(f0 + (chunk.len() / 2) as u64, g)),
             None => (g, g),

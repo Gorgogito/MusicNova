@@ -229,6 +229,10 @@ impl Processor for Limiter {
         }
         true
     }
+
+    fn latency(&self) -> usize {
+        Limiter::latency(self)
+    }
 }
 
 #[cfg(test)]
