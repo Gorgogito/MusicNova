@@ -2266,6 +2266,7 @@ dependencies = [
  "chrono",
  "flacenc",
  "mn-fx",
+ "mn-stretch",
  "mp3lame-encoder",
  "rubato",
  "serde",

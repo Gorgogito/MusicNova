@@ -26,6 +26,7 @@ extern "C" {
         output_length: usize,
     );
     fn signalsmith_stretch_seek(handle: *mut RawStretch, input: *mut f32, input_length: usize, playback_rate: f64);
+    fn signalsmith_stretch_set_formant_factor(handle: *mut RawStretch, multiplier: f32, compensate_pitch: c_int);
 }
 
 /// Instancia estéreo de Signalsmith Stretch.
@@ -60,6 +61,12 @@ impl Stretch {
     /// Transposición en semitonos (sin límite de tonalidad).
     pub fn set_transpose_semitones(&mut self, semitones: f32) {
         unsafe { signalsmith_stretch_set_transpose_factor_semitones(self.raw, semitones, 0.0) }
+    }
+
+    /// Conserva los formantes al transponer (el timbre de una voz no cambia
+    /// aunque cambie su altura).
+    pub fn set_preserve_formants(&mut self, on: bool) {
+        unsafe { signalsmith_stretch_set_formant_factor(self.raw, 1.0, on as c_int) }
     }
 
     /// Procesa audio estéreo entrelazado. La razón entre las longitudes de

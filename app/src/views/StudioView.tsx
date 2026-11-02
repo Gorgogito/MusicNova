@@ -10,13 +10,18 @@ import {
   type EffectSlot,
   type Lyrics,
   type MasterSettings,
+  type Note,
   type PracticeSettings,
   type ProjectView,
   type SeparationResult,
   type TrackInfo,
   type TrackView,
+  type Transcription,
   type TransportEvent,
 } from '../lib/api'
+import { NotesLane } from '../components/NotesLane'
+import { TranscriptionPanel } from '../components/TranscriptionPanel'
+import type { TranscriptionJobs } from '../lib/useTranscription'
 import { RecordPanel } from '../components/RecordPanel'
 import type { Recorder } from '../lib/useRecorder'
 import { PracticePanel } from '../components/PracticePanel'
@@ -76,9 +81,13 @@ interface Props {
   onMasterChange: (m: MasterSettings) => void
   masterJob: { job: MasterJob | null; start: (reference: string) => void; cancel: () => void }
   masterWarnings: string[]
+  transcriptionJobs: TranscriptionJobs
+  onNotesChange: (t: Transcription) => void
+  /** El proyecto cambió entero (pistas nuevas generadas en el núcleo). */
+  onProjectReplaced: (p: ProjectView) => void
 }
 
-type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record'
+type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record' | 'transcription'
 
 const HEADER_W = 280
 const MAX_ZOOM = 64
@@ -89,6 +98,7 @@ const TICK_STEPS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
 type Change =
   | { kind: 'clips'; trackId: string; before: Clip[]; after: Clip[] }
   | { kind: 'automation'; trackId: string | null; before: AutomationLane[]; after: AutomationLane[] }
+  | { kind: 'notes'; trackId: string; before: Note[]; after: Note[] }
 type Edit = Change[]
 /** Clave de canal para mostrar u ocultar su automatización. */
 const MASTER_KEY = 'master'
@@ -114,6 +124,9 @@ export function StudioView({
   onMasterChange,
   masterJob,
   masterWarnings,
+  transcriptionJobs,
+  onNotesChange,
+  onProjectReplaced,
 }: Props) {
   const position = transport.position
   const recording = transport.recording
@@ -134,7 +147,9 @@ export function StudioView({
         ? 'lyrics'
         : masterJob.job
           ? 'master'
-          : panel
+          : transcriptionJobs.job
+            ? 'transcription'
+            : panel
   const [notation, setNotation] = usePref<Notation>('notation', 'english', ['english', 'latin'])
   const [instrument, setInstrument] = usePref<'guitar' | 'piano'>('instrument', 'guitar', ['guitar', 'piano'])
 
@@ -275,13 +290,58 @@ export function StudioView({
     },
     [onAutomationChange, onError],
   )
+  // ---- Notas (piano roll) ------------------------------------------------------
+  const [shownNotes, setShownNotes] = useState<Set<string>>(new Set())
+  const toggleNotes = (trackId: string) =>
+    setShownNotes((s) => {
+      const n = new Set(s)
+      if (n.has(trackId)) n.delete(trackId)
+      else n.add(trackId)
+      return n
+    })
+  // Las notas se transcriben y se muestran a la vez.
+  const prevNotes = useRef(project.notes)
+  useEffect(() => {
+    const before = new Set(prevNotes.current?.tracks.map((t) => t.track_id))
+    prevNotes.current = project.notes
+    const fresh = project.notes?.tracks.filter((t) => !before.has(t.track_id)).map((t) => t.track_id) ?? []
+    if (fresh.length) setShownNotes((s) => new Set([...s, ...fresh]))
+  }, [project.notes])
+  const notesRef = useRef(project.notes)
+  useEffect(() => {
+    notesRef.current = project.notes
+  })
+  /** Sustituye localmente las notas de una pista. */
+  const setTrackNotes = useCallback(
+    (trackId: string, notes: Note[]) => {
+      const cur = notesRef.current ?? { version: 1, tracks: [] }
+      const exists = cur.tracks.some((t) => t.track_id === trackId)
+      const tracks = exists
+        ? cur.tracks.map((t) => (t.track_id === trackId ? { ...t, notes } : t))
+        : [...cur.tracks, { track_id: trackId, mode: 'poly' as const, notes }]
+      onNotesChange({ ...cur, tracks })
+    },
+    [onNotesChange],
+  )
+  const saveNotes = useCallback(
+    (trackId: string, notes: Note[]) => {
+      setTrackNotes(trackId, notes)
+      api
+        .notesUpdate(trackId, notes)
+        .then(onNotesChange)
+        .catch((err) => onError(errorMessage(err)))
+    },
+    [setTrackNotes, onNotesChange, onError],
+  )
+
   /** Aplica un lado (antes o después) de un cambio del historial. */
   const applyChange = useCallback(
     (c: Change, side: 'before' | 'after') => {
       if (c.kind === 'clips') saveClips(c.trackId, c[side])
+      else if (c.kind === 'notes') saveNotes(c.trackId, c[side])
       else saveAutomation(c.trackId, c[side])
     },
-    [saveClips, saveAutomation],
+    [saveClips, saveAutomation, saveNotes],
   )
   const commitEdit = useCallback(
     (edit: Edit) => {
@@ -477,8 +537,13 @@ export function StudioView({
     if (!recording) api.seek(t).catch((err) => onError(errorMessage(err)))
   }
 
+  const trackNotes = (id: string) => project.notes?.tracks.find((t) => t.track_id === id)
+  const pitchFor = (id: string) => (project.pitch?.track_id === id ? project.pitch : null)
+  /** Tomas y pistas generadas por la transcripción (síntesis MIDI, voz afinada). */
+  const removable = (t: TrackView) =>
+    t.kind === 'recording' || (t.kind === 'generated' && (t.file.startsWith('audio/midi/') || t.file.startsWith('audio/tuned/')))
   const removeTrack = async (t: TrackView) => {
-    const ok = await ask(`¿Eliminar «${t.name}»? El audio de la toma se borrará del proyecto.`, {
+    const ok = await ask(`¿Eliminar «${t.name}»? Su audio se borrará del proyecto.`, {
       title: 'Eliminar pista',
       kind: 'warning',
       okLabel: 'Eliminar',
@@ -571,6 +636,12 @@ export function StudioView({
             <Icon name="chord" size={16} /> Análisis
           </button>
           <button
+            className={`btn ${shownPanel === 'transcription' ? 'active' : ''}`}
+            onClick={() => setPanel(panel === 'transcription' ? null : 'transcription')}
+          >
+            <Icon name="piano" size={16} /> Transcripción
+          </button>
+          <button
             className={`btn ${shownPanel === 'lyrics' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'lyrics' ? null : 'lyrics')}
           >
@@ -658,6 +729,21 @@ export function StudioView({
           onStart={lyricsJob.start}
           onCancel={lyricsJob.cancel}
           onChange={saveLyrics}
+          onSeek={seek}
+          onOpenModels={onOpenModels}
+          onError={onError}
+        />
+      )}
+      {shownPanel === 'transcription' && (
+        <TranscriptionPanel
+          project={project}
+          jobs={transcriptionJobs}
+          workerReady={workerReady}
+          notation={notation}
+          shownNotes={shownNotes}
+          onToggleNotes={toggleNotes}
+          onNotesChange={onNotesChange}
+          onProjectReplaced={onProjectReplaced}
           onSeek={seek}
           onOpenModels={onOpenModels}
           onError={onError}
@@ -811,10 +897,19 @@ export function StudioView({
                   >
                     A
                   </button>
-                  {t.kind === 'recording' && (
+                  {(trackNotes(t.id) || pitchFor(t.id)) && (
+                    <button
+                      className={`toggle notes ${shownNotes.has(t.id) ? 'open on' : ''}`}
+                      title={shownNotes.has(t.id) ? 'Ocultar el piano roll' : 'Ver el piano roll (notas transcritas y curva de tono)'}
+                      onClick={() => toggleNotes(t.id)}
+                    >
+                      N
+                    </button>
+                  )}
+                  {removable(t) && (
                     <button
                       className="icon-btn lane-remove"
-                      title="Eliminar la toma"
+                      title="Eliminar la pista"
                       disabled={recording}
                       onClick={() => removeTrack(t)}
                     >
@@ -881,6 +976,32 @@ export function StudioView({
               />
             </div>
             {expanded.has(t.id) && automationRows(t.id, t.automation, t.effects, kind.color)}
+            {shownNotes.has(t.id) && (trackNotes(t.id) || pitchFor(t.id)) && (
+              <div className="lane notes-lane">
+                <div className="lane-header auto-header">
+                  <span className="lane-chip" style={{ background: kind.color }} />
+                  <span className="small">
+                    {trackNotes(t.id) ? `Notas · ${trackNotes(t.id)!.notes.length}` : 'Curva de tono'}
+                    {pitchFor(t.id) && trackNotes(t.id) ? ' · curva de tono' : ''}
+                  </span>
+                  <button className="icon-btn" title="Ocultar" onClick={() => toggleNotes(t.id)}>
+                    <Icon name="x" size={14} />
+                  </button>
+                </div>
+                <NotesLane
+                  notes={trackNotes(t.id)?.notes ?? []}
+                  curve={pitchFor(t.id)}
+                  duration={duration}
+                  color={kind.color}
+                  notation={notation}
+                  locked={recording}
+                  snap={snap}
+                  onSeek={seek}
+                  onPreview={(notes) => setTrackNotes(t.id, notes)}
+                  onCommit={(before, after) => commitEdit([{ kind: 'notes', trackId: t.id, before, after }])}
+                />
+              </div>
+            )}
             </Fragment>
           )
         })}

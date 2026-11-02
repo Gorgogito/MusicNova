@@ -1,0 +1,17 @@
+id = "panns_cnn14"
+name = "PANNs Cnn14 · Instrumentos"
+task = "instruments"
+family = "panns"
+arch = "Cnn14"
+description = "Reconoce los instrumentos de la canción y cuándo suenan (527 clases de AudioSet). Recomendado."
+license = "CC-BY-4.0"
+license_url = "https://zenodo.org/records/3987831"
+commercial_use = true
+min_vram_gb = 1
+priority = 2
+
+[[files]]
+name = "Cnn14_mAP=0.431.pth"
+url = "https://zenodo.org/records/3987831/files/Cnn14_mAP%3D0.431.pth?download=1"
+sha256 = "0dc499e40e9761ef5ea061ffc77697697f277f6a960894903df3ada000e34b31"
+size = 327428481

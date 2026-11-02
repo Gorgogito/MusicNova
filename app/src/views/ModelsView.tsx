@@ -11,6 +11,7 @@ const TASK_LABELS: Record<string, string> = {
   key: 'Tonalidad',
   lyrics: 'Letras',
   transcription: 'Audio a MIDI',
+  instruments: 'Detección de instrumentos',
   generation: 'Generación',
   tool: 'Herramientas',
 }

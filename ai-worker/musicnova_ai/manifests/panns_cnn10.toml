@@ -1,0 +1,16 @@
+id = "panns_cnn10"
+name = "PANNs Cnn10 · Instrumentos (ligero)"
+task = "instruments"
+family = "panns"
+arch = "Cnn10"
+description = "Versión pequeña y rápida del reconocedor de instrumentos. Algo menos precisa."
+license = "CC-BY-4.0"
+license_url = "https://zenodo.org/records/3987831"
+commercial_use = true
+priority = 1
+
+[[files]]
+name = "Cnn10_mAP=0.380.pth"
+url = "https://zenodo.org/records/3987831/files/Cnn10_mAP%3D0.380.pth?download=1"
+sha256 = "5240bdc47444e331bbeb54fd741d2b3f933a4526e84b0c17bf3593df94b13962"
+size = 25237595

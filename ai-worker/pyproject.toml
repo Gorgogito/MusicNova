@@ -46,6 +46,15 @@ lyrics = [
     "faster-whisper>=1.1",
     "nvidia-cublas-cu12; sys_platform == 'win32' or sys_platform == 'linux'",
 ]
+# Transcripción: audio a MIDI (Basic Pitch en ONNX, incluido), tono de la voz
+# (pYIN de librosa) e instrumentos (PANNs, además necesita torch).
+transcription = [
+    "numpy>=2",
+    "scipy",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "onnxruntime>=1.17",
+]
 # Master por referencia (Matchering 2.0, GPL-3.0).
 mastering = [
     "numpy>=2",
@@ -61,7 +70,7 @@ build-backend = "setuptools.build_meta"
 include = ["musicnova_ai*"]
 
 [tool.setuptools.package-data]
-musicnova_ai = ["manifests/*.toml"]
+musicnova_ai = ["manifests/*.toml", "vendor/*/LICENSE", "vendor/basic_pitch/nmp.onnx", "vendor/panns/class_labels_indices.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

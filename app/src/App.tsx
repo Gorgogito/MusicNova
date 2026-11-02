@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
   api,
@@ -9,12 +9,15 @@ import {
   type AppInfo,
   type AutomationLane,
   type Clip,
+  type InstrumentReport,
   type Lyrics,
   type MasterReferenceResult,
   type MasterSettings,
+  type PitchCurve,
   type PracticeSettings,
   type ProjectView,
   type TrackInfo,
+  type Transcription,
   type TransportEvent,
   type WorkerStatus,
 } from './lib/api'
@@ -27,6 +30,7 @@ import { SystemView } from './views/SystemView'
 import { useSeparation } from './lib/useSeparation'
 import { useAnalysis } from './lib/useAnalysis'
 import { useLyrics } from './lib/useLyrics'
+import { JOB_LABEL, useTranscription } from './lib/useTranscription'
 import { useMasterReference } from './lib/useMasterReference'
 import { useRecorder } from './lib/useRecorder'
 
@@ -265,6 +269,20 @@ export default function App() {
   }, [])
   const lyricsJob = useLyrics(onLyrics, showError)
 
+  const onNotesChange = useCallback((notes: Transcription) => {
+    setProject((p) => p && { ...p, notes })
+  }, [])
+  const transcriptionHandlers = useMemo(
+    () => ({
+      onNotes: onNotesChange,
+      onPitch: (pitch: PitchCurve) => setProject((p) => p && { ...p, pitch }),
+      onInstruments: (instruments: InstrumentReport) => setProject((p) => p && { ...p, instruments }),
+    }),
+    [onNotesChange],
+  )
+  const transcriptionJobs = useTranscription(transcriptionHandlers, showError)
+  const onProjectReplaced = useCallback((p: ProjectView) => setProject(p), [])
+
   const [masterWarnings, setMasterWarnings] = useState<string[]>([])
   const onMastered = useCallback((p: ProjectView, r: MasterReferenceResult) => {
     setProject(p)
@@ -358,6 +376,14 @@ export default function App() {
             </div>
           </button>
         )}
+        {transcriptionJobs.job && (
+          <button className="sidebar-job small" onClick={() => setView('studio')}>
+            {JOB_LABEL[transcriptionJobs.job.kind]}… {Math.round(transcriptionJobs.job.progress * 100)}%
+            <div className="progress">
+              <div style={{ width: `${transcriptionJobs.job.progress * 100}%` }} />
+            </div>
+          </button>
+        )}
         {analysisJob.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
             Analizando… {Math.round(analysisJob.job.progress * 100)}%
@@ -403,6 +429,9 @@ export default function App() {
             onMasterChange={onMasterChange}
             masterJob={masterJob}
             masterWarnings={masterWarnings}
+            transcriptionJobs={transcriptionJobs}
+            onNotesChange={onNotesChange}
+            onProjectReplaced={onProjectReplaced}
           />
         )}
         {view === 'models' && <ModelsView worker={worker} onError={showError} />}

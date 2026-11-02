@@ -79,7 +79,7 @@ Crea un manifiesto TOML en `ai-worker/musicnova_ai/manifests/` (o en `%LOCALAPPD
 ```toml
 id = "mi_modelo"
 name = "Mi modelo"
-task = "separation"          # separation | chords | beats | key | lyrics | transcription | generation
+task = "separation"          # separation | chords | beats | key | lyrics | transcription | instruments | generation
 family = "demucs"
 description = "..."
 license = "MIT"

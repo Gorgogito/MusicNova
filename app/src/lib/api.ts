@@ -270,6 +270,65 @@ export interface ProjectView {
   analysis: Analysis | null
   lyrics: Lyrics | null
   plugin_errors: string[]
+  notes: Transcription | null
+  pitch: PitchCurve | null
+  instruments: InstrumentReport | null
+}
+
+// ---- Fase 6: transcripción ----------------------------------------------------------
+
+export interface Note {
+  /** Segundos de la línea de tiempo. */
+  start: number
+  end: number
+  /** Nota MIDI (60 = Do central). */
+  pitch: number
+  velocity: number
+}
+
+export interface TrackNotes {
+  track_id: string
+  mode: 'poly' | 'mono'
+  notes: Note[]
+}
+
+export interface Transcription {
+  version: number
+  tracks: TrackNotes[]
+}
+
+export interface PitchCurve {
+  version: number
+  track_id: string | null
+  source: string
+  /** Intervalo entre puntos (s); el punto k es el instante k·hop. */
+  hop: number
+  /** Hz; 0 = sin voz. */
+  f0: number[]
+  confidence: number[]
+}
+
+export interface Instrument {
+  id: string
+  label: string
+  confidence: number
+  coverage: number
+  segments: [number, number][]
+}
+
+export interface InstrumentReport {
+  version: number
+  source: string
+  duration: number
+  instruments: Instrument[]
+}
+
+export interface TuneSettings {
+  strength: number
+  speed: number
+  /** Clases de altura permitidas (0 = Do); vacío = cromática. */
+  scale: number[]
+  preserve_formants: boolean
 }
 
 export interface ProjectSummary {
@@ -457,6 +516,19 @@ export const api = {
   lyricsApply: () => invoke<Lyrics>('lyrics_apply'),
   lyricsUpdate: (lyrics: Lyrics) => invoke<Lyrics>('lyrics_update', { lyrics }),
   lyricsExport: (path: string, format: LyricsFormat) => invoke<string>('lyrics_export', { path, format }),
+  notesStart: (trackId: string, mode: 'poly' | 'mono', sensitivity: number, device: string) =>
+    invoke<{ job_id: string }>('notes_start', { trackId, mode, sensitivity, device }),
+  notesApply: (trackId: string) => invoke<Transcription>('notes_apply', { trackId }),
+  notesUpdate: (trackId: string, notes: Note[]) => invoke<Transcription>('notes_update', { trackId, notes }),
+  notesRemove: (trackId: string) => invoke<Transcription>('notes_remove', { trackId }),
+  notesExportMidi: (path: string, trackId: string | null) => invoke<string>('notes_export_midi', { path, trackId }),
+  notesRender: (trackId: string) => invoke<ProjectView>('notes_render', { trackId }),
+  pitchStart: (trackId: string) => invoke<{ job_id: string }>('pitch_start', { trackId }),
+  pitchApply: (trackId: string) => invoke<PitchCurve>('pitch_apply', { trackId }),
+  tuneRender: (settings: TuneSettings) => invoke<ProjectView>('tune_render', { settings }),
+  instrumentsStart: (modelId: string | undefined, device: string) =>
+    invoke<{ job_id: string }>('instruments_start', { modelId, device }),
+  instrumentsApply: () => invoke<InstrumentReport>('instruments_apply'),
   inputDevices: () => invoke<InputDeviceInfo[]>('input_devices'),
   inputOpen: (device: string | null, channels: InputChannels) => invoke<InputInfo>('input_open', { device, channels }),
   inputClose: () => invoke<void>('input_close'),

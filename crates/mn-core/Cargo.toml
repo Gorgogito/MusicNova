@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 mn-fx = { path = "../mn-fx" }
+mn-stretch = { path = "../mn-stretch" }
 symphonia = { version = "0.5", features = ["all"] }
 rubato = "0.16"
 flacenc = "0.5"

@@ -11,6 +11,8 @@ pub mod master;
 pub mod mix;
 pub mod peaks;
 pub mod project;
+pub mod transcription;
+pub mod tuning;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {

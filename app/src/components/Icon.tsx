@@ -14,6 +14,7 @@ const PATHS: Record<string, string> = {
   refresh: 'M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4',
   x: 'M6 6l12 12M18 6L6 18',
   music: 'M9 18V6l11-2v12M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+  piano: 'M3 5h18v14H3zM8 13v6M13 13v6M18 13v6M6.5 5v8h3V5M11.5 5v8h3V5M16.5 5v8h3V5',
   mic: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7',
   pin: 'M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z',
   lyrics: 'M4 6h16M4 10h10M4 14h16M4 18h7M17 15v5M17 15l3-1',

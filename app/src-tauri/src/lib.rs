@@ -2,6 +2,7 @@
 //! los proyectos y el proceso de IA.
 
 mod plugins;
+mod transcribe;
 mod worker;
 
 pub use plugins::scan_subprocess_main;
@@ -88,6 +89,10 @@ struct ProjectView {
     lyrics: Option<Lyrics>,
     /// Plugins que no se pudieron cargar (suenan sin procesar).
     plugin_errors: Vec<String>,
+    /// Fase 6: notas transcritas, curva de tono de la voz e instrumentos.
+    notes: Option<mn_core::transcription::Transcription>,
+    pitch: Option<mn_core::transcription::PitchCurve>,
+    instruments: Option<mn_core::transcription::InstrumentReport>,
 }
 
 #[derive(Serialize)]
@@ -217,6 +222,7 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
 
     let slot_ids = plugin_slot_ids(&project);
     mn_plugin::retain_instances(|id| slot_ids.iter().any(|s| s == id));
+    let (notes, pitch, instruments) = transcribe::load_all(&dir, &project);
     let view = ProjectView {
         dir: dir.display().to_string(),
         project: project.clone(),
@@ -225,6 +231,9 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
         analysis: analysis.clone(),
         lyrics,
         plugin_errors: plugin_errors(&project),
+        notes,
+        pitch,
+        instruments,
     };
     let mut s = state.session.lock().unwrap();
     s.dir = Some(dir);
@@ -1380,7 +1389,7 @@ fn track_remove(state: State<'_, AppState>, track_id: Uuid) -> Result<(), String
     project.save(&dir).map_err(err)?;
     let slot_ids = plugin_slot_ids(project);
     mn_plugin::retain_instances(|id| slot_ids.iter().any(|s| s == id));
-    if track.file.starts_with(RECORDINGS_DIR) {
+    if [RECORDINGS_DIR, transcribe::MIDI_DIR, transcribe::TUNED_DIR].iter().any(|d| track.file.starts_with(d)) {
         let _ = std::fs::remove_file(project.track_path(&dir, &track));
     }
     Ok(())
@@ -1513,6 +1522,17 @@ pub fn run() {
             plugins::plugin_params,
             plugins::plugin_param_set,
             plugins::plugins_sync,
+            transcribe::notes_start,
+            transcribe::notes_apply,
+            transcribe::notes_update,
+            transcribe::notes_remove,
+            transcribe::notes_export_midi,
+            transcribe::notes_render,
+            transcribe::pitch_start,
+            transcribe::pitch_apply,
+            transcribe::tune_render,
+            transcribe::instruments_start,
+            transcribe::instruments_apply,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");
