@@ -26,6 +26,8 @@ pub fn balance_gains(gain: f32, pan: f32) -> (f32, f32) {
 /// Una pista para la mezcla offline.
 pub struct MixInput<'a> {
     pub data: &'a [f32],
+    /// Frame de la línea de tiempo en el que empieza la pista.
+    pub offset: usize,
     pub gain_db: f32,
     pub pan: f32,
     pub mute: bool,
@@ -36,7 +38,7 @@ pub struct MixInput<'a> {
 /// Mezcla las pistas exactamente como suenan en el motor: silencio, solo,
 /// efectos de cada pista, volumen, panorama y bus máster.
 pub fn mixdown(inputs: &[MixInput], master: &MasterSettings, sample_rate: u32) -> AudioBuffer {
-    let len = inputs.iter().map(|t| t.data.len()).max().unwrap_or(0);
+    let len = inputs.iter().map(|t| t.offset * 2 + t.data.len()).max().unwrap_or(0);
     let any_solo = inputs.iter().any(|t| t.solo);
     let mut data = vec![0.0f32; len];
     let mut block = vec![0.0f32; BLOCK * 2];
@@ -49,9 +51,13 @@ pub fn mixdown(inputs: &[MixInput], master: &MasterSettings, sample_rate: u32) -
         // Se procesa toda la longitud de la mezcla para no cortar colas de reverb o delay.
         for (start, out) in (0..len).step_by(BLOCK * 2).zip(data.chunks_mut(BLOCK * 2)) {
             let n = out.len();
-            let src = t.data.get(start..(start + n).min(t.data.len())).unwrap_or(&[]);
-            block[..src.len()].copy_from_slice(src);
-            block[src.len()..n].fill(0.0);
+            block[..n].fill(0.0);
+            // Parte del bloque [start, start + n) cubierta por la pista desplazada.
+            let (t0, t1) = (t.offset * 2, t.offset * 2 + t.data.len());
+            let (a, b) = (start.max(t0), (start + n).min(t1));
+            if a < b {
+                block[a - start..b - start].copy_from_slice(&t.data[a - t0..b - t0]);
+            }
             if let Some(c) = chain.as_mut() {
                 c.process(&mut block[..n]);
             }
@@ -80,7 +86,7 @@ mod tests {
     use mn_fx::{EffectParams, LimiterParams};
 
     fn input<'a>(data: &'a [f32], gain_db: f32, pan: f32, solo: bool) -> MixInput<'a> {
-        MixInput { data, gain_db, pan, mute: false, solo, effects: &[] }
+        MixInput { data, offset: 0, gain_db, pan, mute: false, solo, effects: &[] }
     }
 
     #[test]
@@ -92,6 +98,16 @@ mod tests {
 
         let m = mixdown(&[input(&a, 0.0, 0.0, false), input(&b, -60.0, 0.0, true)], &MasterSettings::default(), 10);
         assert!(m.data.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn mixdown_places_offset_tracks() {
+        let a = vec![0.5f32; 4];
+        let b = vec![0.25f32; 4];
+        let mut late = input(&b, 0.0, 0.0, false);
+        late.offset = 3;
+        let m = mixdown(&[input(&a, 0.0, 0.0, false), late], &MasterSettings::default(), 10);
+        assert_eq!(m.data, vec![0.5, 0.5, 0.5, 0.5, 0.0, 0.0, 0.25, 0.25, 0.25, 0.25]);
     }
 
     #[test]
@@ -112,7 +128,7 @@ mod tests {
         };
         let track_fx = lim(-12.0);
         let peak = |b: &AudioBuffer| b.data.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        let t = MixInput { data: &sine, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &track_fx };
+        let t = MixInput { data: &sine, offset: 0, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects: &track_fx };
         let m = mixdown(&[t], &MasterSettings::default(), sr);
         assert!((0.24..=0.2512).contains(&peak(&m)), "{}", peak(&m));
 

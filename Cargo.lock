@@ -2256,6 +2256,7 @@ dependencies = [
  "mn-fx",
  "mn-stretch",
  "rtrb",
+ "serde",
  "thiserror 2.0.21",
 ]
 

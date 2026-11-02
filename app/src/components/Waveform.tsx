@@ -5,13 +5,15 @@ interface Props {
   peaks: Peaks
   /** Duración total de la línea de tiempo (la pista más larga). */
   timelineDuration: number
+  /** Segundo en el que empieza la pista dentro de la línea de tiempo. */
+  offset?: number
   sampleRate: number
   color: string
   dimmed?: boolean
 }
 
 /** Dibuja los picos en un canvas; se redibuja solo al cambiar tamaño o datos. */
-export function Waveform({ peaks, timelineDuration, sampleRate, color, dimmed }: Props) {
+export function Waveform({ peaks, timelineDuration, offset = 0, sampleRate, color, dimmed }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -35,14 +37,16 @@ export function Waveform({ peaks, timelineDuration, sampleRate, color, dimmed }:
       const count = peaks.data.length / 2
       const peaksPerSecond = sampleRate / peaks.frames_per_peak
       const totalPeaks = Math.max(1, timelineDuration * peaksPerSecond)
+      const shift = offset * peaksPerSecond
       const mid = h / 2
       for (let x = 0; x < w; x++) {
-        const start = Math.floor((x / w) * totalPeaks)
-        const end = Math.max(start + 1, Math.floor(((x + 1) / w) * totalPeaks))
+        const start = Math.floor((x / w) * totalPeaks - shift)
+        const end = Math.max(start + 1, Math.floor(((x + 1) / w) * totalPeaks - shift))
+        if (end <= 0) continue
         if (start >= count) break
         let lo = 0
         let hi = 0
-        for (let i = start; i < Math.min(end, count); i++) {
+        for (let i = Math.max(0, start); i < Math.min(end, count); i++) {
           lo = Math.min(lo, peaks.data[i * 2])
           hi = Math.max(hi, peaks.data[i * 2 + 1])
         }
@@ -56,7 +60,7 @@ export function Waveform({ peaks, timelineDuration, sampleRate, color, dimmed }:
     const ro = new ResizeObserver(draw)
     ro.observe(canvas)
     return () => ro.disconnect()
-  }, [peaks, timelineDuration, sampleRate])
+  }, [peaks, timelineDuration, offset, sampleRate])
 
   return (
     <canvas

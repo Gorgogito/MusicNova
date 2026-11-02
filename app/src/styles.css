@@ -1412,3 +1412,84 @@ select.compact {
     left: 100%;
   }
 }
+
+/* ---------- Grabación ---------- */
+.record {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.record .lane-slider {
+  grid-template-columns: 28px 1fr 56px;
+}
+input.num.wide {
+  width: 88px;
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.check.disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+.check input {
+  accent-color: var(--accent);
+}
+.btn.record-btn {
+  border-color: rgba(255, 93, 115, 0.55);
+  color: var(--danger);
+}
+.btn.record-btn:hover:not(:disabled) {
+  background: rgba(255, 93, 115, 0.12);
+}
+.btn.record-btn.on {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+.rec-status {
+  color: var(--danger);
+  font-weight: 600;
+}
+.badge.rec {
+  color: #fff;
+  border-color: var(--danger);
+  background: var(--danger);
+}
+@keyframes rec-pulse {
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 93, 115, 0.25);
+  }
+}
+.record-region {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 93, 115, 0.12);
+  border-left: 2px solid var(--danger);
+  pointer-events: none;
+}
+.lane-remove {
+  margin-left: 2px;
+}
+.new-project {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 4px;
+}
+.new-project input {
+  flex: 1;
+  max-width: 320px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+}

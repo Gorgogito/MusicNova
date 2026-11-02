@@ -4,6 +4,7 @@ import {
   api,
   errorMessage,
   events,
+  timelineEnd,
   type Analysis,
   type AppInfo,
   type Lyrics,
@@ -25,6 +26,7 @@ import { useSeparation } from './lib/useSeparation'
 import { useAnalysis } from './lib/useAnalysis'
 import { useLyrics } from './lib/useLyrics'
 import { useMasterReference } from './lib/useMasterReference'
+import { useRecorder } from './lib/useRecorder'
 
 type View = 'projects' | 'studio' | 'models' | 'system'
 
@@ -45,6 +47,9 @@ const IDLE: TransportEvent = {
   peak_r: 0,
   lufs_m: null,
   lufs_s: null,
+  recording: false,
+  input_peak: null,
+  recorded: 0,
 }
 
 export default function App() {
@@ -85,7 +90,7 @@ export default function App() {
       try {
         const p = await action()
         setProject(p)
-        setTransport({ ...IDLE, duration: Math.max(0, ...p.tracks.map((t) => t.duration)) })
+        setTransport({ ...IDLE, duration: timelineEnd(p.tracks) })
         setView('studio')
       } catch (e) {
         showError(errorMessage(e))
@@ -101,6 +106,24 @@ export default function App() {
     [load],
   )
   const openProject = useCallback((dir: string) => load('Abriendo proyecto…', () => api.openProject(dir)), [load])
+  const createProject = useCallback((name: string) => load('Creando proyecto…', () => api.createProject(name)), [load])
+
+  const recorder = useRecorder(showError)
+  const recorderFinished = recorder.finished
+  useEffect(() => {
+    const un = events.recordFinished((r) => {
+      recorderFinished()
+      if (r.track) {
+        const track = r.track
+        const { duration: _d, peaks: _p, ...info } = track
+        setProject((p) => p && { ...p, tracks: [...p.tracks, track], project: { ...p.project, tracks: [...p.project.tracks, info] } })
+      }
+      if (r.message) showError(r.message)
+    })
+    return () => {
+      un.then((f) => f())
+    }
+  }, [recorderFinished, showError])
 
   // Arrastrar y soltar archivos sobre la ventana.
   useEffect(() => {
@@ -166,6 +189,8 @@ export default function App() {
       const p = project.project.practice
       const run = (pr: Promise<unknown>) => pr.catch((err) => showError(errorMessage(err)))
       const pos = transport.position
+      // Durante la grabación el cabezal no se mueve: solo se puede parar.
+      if (transport.recording && !['Space', 'KeyR', 'KeyK'].includes(e.code)) return
       switch (e.code) {
         case 'Space':
           e.preventDefault()
@@ -211,11 +236,15 @@ export default function App() {
         case 'KeyK':
           changePractice({ metronome: !p.metronome })
           break
+        case 'KeyR':
+          if (transport.recording) recorder.stop()
+          else if (recorder.input && !transport.playing) recorder.start(pos)
+          break
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [project, transport, showError, changePractice])
+  }, [project, transport, showError, changePractice, recorder])
 
   const onSeparated = useCallback((p: ProjectView) => setProject(p), [])
   const separation = useSeparation(onSeparated, showError)
@@ -242,6 +271,17 @@ export default function App() {
 
   const onMasterChange = useCallback((master: MasterSettings) => {
     setProject((p) => p && { ...p, project: { ...p.project, master } })
+  }, [])
+
+  const onTrackRemoved = useCallback((id: string) => {
+    setProject(
+      (p) =>
+        p && {
+          ...p,
+          tracks: p.tracks.filter((t) => t.id !== id),
+          project: { ...p.project, tracks: p.project.tracks.filter((t) => t.id !== id) },
+        },
+    )
   }, [])
 
   const onTrackChange = useCallback((t: TrackInfo) => {
@@ -288,6 +328,11 @@ export default function App() {
             </div>
           </button>
         )}
+        {transport.recording && (
+          <button className="sidebar-job small rec-status" onClick={() => setView('studio')}>
+            ● Grabando… {Math.floor(transport.recorded)} s
+          </button>
+        )}
         {lyricsJob.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
             Transcribiendo… {Math.round(lyricsJob.job.progress * 100)}%
@@ -309,12 +354,21 @@ export default function App() {
       <main className="content">
         {busy && <div className="busy-bar" />}
         {view === 'projects' && (
-          <ProjectsView info={info} busy={busy} onImport={importAudio} onOpen={openProject} onError={showError} />
+          <ProjectsView
+            info={info}
+            busy={busy}
+            onImport={importAudio}
+            onCreate={createProject}
+            onOpen={openProject}
+            onError={showError}
+          />
         )}
         {view === 'studio' && project && (
           <StudioView
             project={project}
-            position={transport.position}
+            transport={transport}
+            recorder={recorder}
+            onTrackRemoved={onTrackRemoved}
             onTrackChange={onTrackChange}
             onError={showError}
             separation={separation}

@@ -4,7 +4,7 @@ import { toDb } from '../lib/format'
 const FLOOR_DB = -48
 
 /** Medidor de pico estéreo con caída suave. */
-export function Meter({ left, right }: { left: number; right: number }) {
+export function Meter({ left, right, title = 'Nivel de salida' }: { left: number; right: number; title?: string }) {
   const [levels, setLevels] = useState({ l: FLOOR_DB, r: FLOOR_DB })
   const held = useRef({ l: FLOOR_DB, r: FLOOR_DB })
 
@@ -18,7 +18,7 @@ export function Meter({ left, right }: { left: number; right: number }) {
   const clip = levels.l >= -0.1 || levels.r >= -0.1
 
   return (
-    <div className="meter" title="Nivel de salida">
+    <div className="meter" title={title}>
       {(['l', 'r'] as const).map((ch) => (
         <div key={ch} className="meter-bar">
           <div className="meter-fill" style={{ width: pct(levels[ch]) }} />

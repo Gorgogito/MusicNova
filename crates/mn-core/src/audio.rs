@@ -209,6 +209,62 @@ pub fn write_wav_f32(path: &Path, buf: &AudioBuffer) -> Result<()> {
     Ok(())
 }
 
+/// Escritor incremental de WAV estéreo `f32`: escribe la cabecera al crear el
+/// archivo y la corrige al terminar, de modo que una grabación larga nunca
+/// tiene que caber entera en memoria.
+pub struct WavF32Writer {
+    w: BufWriter<File>,
+    frames: u64,
+}
+
+impl WavF32Writer {
+    pub fn create(path: &Path, sample_rate: u32) -> Result<Self> {
+        let mut w = BufWriter::new(File::create(path)?);
+        let block_align: u16 = 2 * 4;
+        w.write_all(b"RIFF")?;
+        w.write_all(&36u32.to_le_bytes())?;
+        w.write_all(b"WAVEfmt ")?;
+        w.write_all(&16u32.to_le_bytes())?;
+        w.write_all(&3u16.to_le_bytes())?; // WAVE_FORMAT_IEEE_FLOAT
+        w.write_all(&2u16.to_le_bytes())?;
+        w.write_all(&sample_rate.to_le_bytes())?;
+        w.write_all(&(sample_rate * block_align as u32).to_le_bytes())?;
+        w.write_all(&block_align.to_le_bytes())?;
+        w.write_all(&32u16.to_le_bytes())?;
+        w.write_all(b"data")?;
+        w.write_all(&0u32.to_le_bytes())?;
+        Ok(Self { w, frames: 0 })
+    }
+
+    /// Añade frames estéreo entrelazados.
+    pub fn write(&mut self, interleaved: &[f32]) -> Result<()> {
+        for s in interleaved {
+            self.w.write_all(&s.to_le_bytes())?;
+        }
+        self.frames += (interleaved.len() / 2) as u64;
+        Ok(())
+    }
+
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// Corrige los tamaños de la cabecera y cierra el archivo.
+    pub fn finish(mut self) -> Result<u64> {
+        use std::io::{Seek, SeekFrom};
+        let data_bytes = u32::try_from(self.frames * 8)
+            .map_err(|_| CoreError::Format("la grabación supera el tamaño máximo de un WAV (4 GB)".into()))?;
+        self.w.flush()?;
+        let f = self.w.get_mut();
+        f.seek(SeekFrom::Start(4))?;
+        f.write_all(&(36 + data_bytes).to_le_bytes())?;
+        f.seek(SeekFrom::Start(40))?;
+        f.write_all(&data_bytes.to_le_bytes())?;
+        f.flush()?;
+        Ok(self.frames)
+    }
+}
+
 /// Formato de muestra para exportar WAV.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -266,6 +322,21 @@ pub fn write_wav(path: &Path, buf: &AudioBuffer, format: WavFormat) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_wav_roundtrip() {
+        let buf = sine(44_100, 0.2, 330.0);
+        let path = std::env::temp_dir().join(format!("mn_core_stream_{}.wav", std::process::id()));
+        let mut w = WavF32Writer::create(&path, 44_100).unwrap();
+        for chunk in buf.data.chunks(1000) {
+            w.write(chunk).unwrap();
+        }
+        assert_eq!(w.finish().unwrap() as usize, buf.frames());
+        let back = decode_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(back.sample_rate, 44_100);
+        assert_eq!(back.data, buf.data);
+    }
 
     #[test]
     fn pcm_roundtrip() {

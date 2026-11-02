@@ -8,12 +8,14 @@ interface Props {
   info: AppInfo | null
   busy: string | null
   onImport: (path: string) => void
+  onCreate: (name: string) => void
   onOpen: (dir: string) => void
   onError: (msg: string) => void
 }
 
-export function ProjectsView({ info, busy, onImport, onOpen, onError }: Props) {
+export function ProjectsView({ info, busy, onImport, onCreate, onOpen, onError }: Props) {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [name, setName] = useState('')
 
   useEffect(() => {
     api.listProjects().then(setProjects).catch((e) => onError(errorMessage(e)))
@@ -33,7 +35,7 @@ export function ProjectsView({ info, busy, onImport, onOpen, onError }: Props) {
       <header className="view-header">
         <div>
           <h1>Proyectos</h1>
-          <p className="muted">Importa una canción para empezar. Todo se procesa en tu equipo.</p>
+          <p className="muted">Importa una canción o empieza un proyecto vacío para grabar. Todo se procesa en tu equipo.</p>
         </div>
       </header>
 
@@ -45,6 +47,27 @@ export function ProjectsView({ info, busy, onImport, onOpen, onError }: Props) {
           {(info?.supported_extensions ?? []).filter((e) => !['wave', 'oga'].includes(e)).join(', ').toUpperCase()}
         </span>
       </button>
+
+      <form
+        className="new-project"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onCreate(name)
+          setName('')
+        }}
+      >
+        <input
+          type="text"
+          placeholder="Nombre del proyecto nuevo"
+          value={name}
+          maxLength={80}
+          onChange={(e) => setName(e.target.value)}
+          disabled={!!busy}
+        />
+        <button className="btn" type="submit" disabled={!!busy}>
+          <Icon name="mic" size={16} /> Proyecto vacío
+        </button>
+      </form>
 
       {info && !info.ffmpeg_available && (
         <p className="small muted">

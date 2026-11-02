@@ -63,6 +63,8 @@ export interface TrackInfo {
   mute: boolean
   solo: boolean
   effects: EffectSlot[]
+  /** Segundo de la línea de tiempo en el que empieza la pista. */
+  offset: number
 }
 
 export interface Peaks {
@@ -221,6 +223,41 @@ export interface TransportEvent {
   peak_r: number
   lufs_m: number | null
   lufs_s: number | null
+  recording: boolean
+  /** Picos de la entrada abierta; `null` si no hay entrada activa. */
+  input_peak: [number, number] | null
+  /** Segundos grabados en la toma actual. */
+  recorded: number
+}
+
+export interface InputDeviceInfo {
+  name: string
+  channels: number
+  sample_rate: number
+  is_default: boolean
+}
+
+export type InputChannels = { mode: 'mono' | 'stereo'; first: number }
+
+export interface InputInfo {
+  device: string
+  sample_rate: number
+  device_channels: number
+  channels: InputChannels
+  monitor_available: boolean
+}
+
+export interface LatencyReport {
+  latency_ms: number
+  spread_ms: number
+  detected: number
+  total: number
+  level_db: number
+}
+
+export interface RecordFinished {
+  track: TrackView | null
+  message: string | null
 }
 
 export interface WorkerStatus {
@@ -295,6 +332,7 @@ export type WorkerEvent =
 export const api = {
   appInfo: () => invoke<AppInfo>('app_info'),
   importAudio: (path: string) => invoke<ProjectView>('import_audio', { path }),
+  createProject: (name: string) => invoke<ProjectView>('create_project', { name }),
   openProject: (dir: string) => invoke<ProjectView>('open_project', { dir }),
   listProjects: () => invoke<ProjectSummary[]>('list_projects'),
   play: (countIn = true) => invoke<void>('transport_play', { countIn }),
@@ -343,6 +381,14 @@ export const api = {
   lyricsApply: () => invoke<Lyrics>('lyrics_apply'),
   lyricsUpdate: (lyrics: Lyrics) => invoke<Lyrics>('lyrics_update', { lyrics }),
   lyricsExport: (path: string, format: LyricsFormat) => invoke<string>('lyrics_export', { path, format }),
+  inputDevices: () => invoke<InputDeviceInfo[]>('input_devices'),
+  inputOpen: (device: string | null, channels: InputChannels) => invoke<InputInfo>('input_open', { device, channels }),
+  inputClose: () => invoke<void>('input_close'),
+  inputMonitor: (enabled: boolean, gainDb: number) => invoke<void>('input_monitor', { enabled, gainDb }),
+  recordStart: (latencyMs: number) => invoke<void>('record_start', { latencyMs }),
+  recordStop: () => invoke<void>('record_stop'),
+  recordCalibrate: () => invoke<LatencyReport>('record_calibrate'),
+  trackRemove: (trackId: string) => invoke<void>('track_remove', { trackId }),
 }
 
 export const events = {
@@ -352,6 +398,13 @@ export const events = {
     listen<WorkerEvent>('worker-event', (e) => cb(e.payload)),
   workerStatus: (cb: (s: WorkerStatus) => void): Promise<UnlistenFn> =>
     listen<WorkerStatus>('worker-status', (e) => cb(e.payload)),
+  recordFinished: (cb: (r: RecordFinished) => void): Promise<UnlistenFn> =>
+    listen<RecordFinished>('record-finished', (e) => cb(e.payload)),
+}
+
+/** Final de la línea de tiempo: la pista que acaba más tarde (con su desfase). */
+export function timelineEnd(tracks: { offset: number; duration: number }[]): number {
+  return Math.max(0, ...tracks.map((t) => (t.offset ?? 0) + t.duration))
 }
 
 export function errorMessage(e: unknown): string {

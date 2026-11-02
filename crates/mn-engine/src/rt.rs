@@ -13,6 +13,7 @@ use mn_fx::Chain;
 use mn_stretch::Stretch;
 
 use crate::click::Clicks;
+use crate::input::Monitor;
 use crate::{BeatGrid, Command, EngineTrack, Garbage, Shared};
 
 /// Frames de salida que se procesan de una vez.
@@ -25,11 +26,29 @@ const MAX_PENDING_CLICKS: usize = 32;
 /// Frames de entrada máximos por bloque (con el tempo al máximo).
 const MAX_IN_FRAMES: usize = (BLOCK as f64 * MAX_TEMPO) as usize + 4;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClickKind {
+    Normal,
+    Accent,
+    /// Barrido de calibración de latencia.
+    Chirp,
+}
+
+impl ClickKind {
+    fn beat(accent: bool) -> Self {
+        if accent {
+            Self::Accent
+        } else {
+            Self::Normal
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PendingClick {
     /// Momento absoluto en frames de salida.
     at: u64,
-    accent: bool,
+    kind: ClickKind,
 }
 
 pub struct RtState {
@@ -62,7 +81,7 @@ pub struct RtState {
     metronome_gain: f32,
     pending: [PendingClick; MAX_PENDING_CLICKS],
     pending_len: usize,
-    voice: Option<(bool, usize)>,
+    voice: Option<(ClickKind, usize)>,
     count_in_until: Option<u64>,
     output_clock: u64,
     /// Golpes detectados en el bloque actual: (frame de entrada, acento).
@@ -77,6 +96,16 @@ pub struct RtState {
     track_buf: Vec<f32>,
     master_chain: Option<Box<Chain>>,
     meter: LoudnessMeter,
+
+    // Grabación.
+    /// El transporte no se detiene al final de las pistas.
+    free_run: bool,
+    /// Publicar el próximo arranque del transporte (frame de salida y posición).
+    announce_start: bool,
+    pub(crate) monitor: Option<Box<Monitor>>,
+    /// Desfase filtrado (ns) entre el reloj de salida y el instante en que suena.
+    play_offset_ns: Option<i128>,
+    sample_rate: u32,
 }
 
 impl RtState {
@@ -109,7 +138,7 @@ impl RtState {
             next_beat: 0,
             metronome_on: false,
             metronome_gain: 0.8,
-            pending: [PendingClick { at: 0, accent: false }; MAX_PENDING_CLICKS],
+            pending: [PendingClick { at: 0, kind: ClickKind::Normal }; MAX_PENDING_CLICKS],
             pending_len: 0,
             voice: None,
             count_in_until: None,
@@ -122,11 +151,16 @@ impl RtState {
             track_buf: vec![0.0; MAX_IN_FRAMES * 2],
             master_chain: None,
             meter: LoudnessMeter::new(sample_rate),
+            free_run: false,
+            announce_start: false,
+            monitor: None,
+            play_offset_ns: None,
+            sample_rate,
         }
     }
 
     fn length(&self) -> u64 {
-        self.tracks.iter().map(|t| t.frames).max().unwrap_or(0)
+        self.tracks.iter().map(|t| t.end()).max().unwrap_or(0)
     }
 
     fn discard(&mut self, g: Garbage) {
@@ -166,9 +200,9 @@ impl RtState {
         self.resync_beats();
     }
 
-    fn push_click(&mut self, at: u64, accent: bool) {
+    fn push_click(&mut self, at: u64, kind: ClickKind) {
         if self.pending_len < MAX_PENDING_CLICKS {
-            self.pending[self.pending_len] = PendingClick { at, accent };
+            self.pending[self.pending_len] = PendingClick { at, kind };
             self.pending_len += 1;
         }
     }
@@ -207,13 +241,14 @@ impl RtState {
             }
             Command::Play => {
                 self.playing = true;
+                self.announce_start = true;
                 self.count_in_until = None;
             }
             Command::PlayWithCountIn { beats, interval } => {
                 let start = self.output_clock;
                 self.pending_len = 0;
                 for k in 0..beats as u64 {
-                    self.push_click(start + (k as f64 * interval) as u64, k == 0);
+                    self.push_click(start + (k as f64 * interval) as u64, ClickKind::beat(k == 0));
                 }
                 self.count_in_until = Some(start + (beats as f64 * interval) as u64);
             }
@@ -300,6 +335,30 @@ impl RtState {
                     c.set_enabled(index, enabled);
                 }
             }
+            Command::SetFreeRun(on) => self.free_run = on,
+            Command::AttachMonitor(m) => {
+                if let Some(old) = self.monitor.replace(m) {
+                    self.discard(Garbage::Monitor(old));
+                }
+            }
+            Command::DetachMonitor => {
+                if let Some(old) = self.monitor.take() {
+                    self.discard(Garbage::Monitor(old));
+                }
+            }
+            Command::SetMonitor { enabled, gain } => {
+                if let Some(m) = self.monitor.as_deref_mut() {
+                    m.enabled = enabled;
+                    m.gain = gain;
+                }
+            }
+            Command::CalibrationClicks { count, interval, lead } => {
+                let first = self.output_clock + lead;
+                for k in 0..count as u64 {
+                    self.push_click(first + k * interval, ClickKind::Chirp);
+                }
+                self.shared.calib.store(first, interval);
+            }
         }
     }
 
@@ -336,7 +395,7 @@ impl RtState {
                     self.next_beat += 1;
                 }
             }
-            if self.playing && p < length {
+            if self.playing && (p < length || self.free_run) {
                 self.src_pos[f] = p;
                 self.position += 1;
             } else {
@@ -352,8 +411,8 @@ impl RtState {
                 continue;
             }
             for (f, &p) in self.src_pos[..frames].iter().enumerate() {
-                let (l, r) = if p < t.frames {
-                    let i = (p * 2) as usize;
+                let (l, r) = if p >= t.offset && p - t.offset < t.frames {
+                    let i = ((p - t.offset) * 2) as usize;
                     (t.data[i], t.data[i + 1])
                 } else {
                     (0.0, 0.0)
@@ -369,7 +428,7 @@ impl RtState {
                 o[1] += s[1] * t.gain_r;
             }
         }
-        if !self.loop_on && self.position >= length {
+        if !self.loop_on && !self.free_run && self.position >= length {
             self.position = length;
             self.playing = false;
         }
@@ -382,13 +441,17 @@ impl RtState {
             self.block_beats_len = 0;
             return;
         }
+        if self.announce_start {
+            self.announce_start = false;
+            self.shared.play_start.store(self.output_clock, self.position);
+        }
         let delay = self.stretch_delay_out();
         if !self.stretching {
             self.mix_source(n, false);
             for k in 0..self.block_beats_len {
                 let (f, accent) = self.block_beats[k];
                 if self.metronome_on {
-                    self.push_click(self.output_clock + f as u64, accent);
+                    self.push_click(self.output_clock + f as u64, ClickKind::beat(accent));
                 }
             }
         } else {
@@ -403,7 +466,7 @@ impl RtState {
                 if self.metronome_on {
                     let offset = if input > 0 { (f as f64 / input as f64 * n as f64) as u64 } else { 0 };
                     // Los golpes se retrasan lo mismo que el audio estirado.
-                    self.push_click(self.output_clock + offset + delay, accent);
+                    self.push_click(self.output_clock + offset + delay, ClickKind::beat(accent));
                 }
             }
         }
@@ -417,20 +480,24 @@ impl RtState {
             let mut i = 0;
             while i < self.pending_len {
                 if self.pending[i].at <= now {
-                    self.voice = Some((self.pending[i].accent, 0));
+                    self.voice = Some((self.pending[i].kind, 0));
                     self.pending_len -= 1;
                     self.pending[i] = self.pending[self.pending_len];
                 } else {
                     i += 1;
                 }
             }
-            if let Some((accent, pos)) = self.voice {
-                let wave = if accent { &self.clicks.accent } else { &self.clicks.normal };
+            if let Some((kind, pos)) = self.voice {
+                let (wave, gain) = match kind {
+                    ClickKind::Accent => (&self.clicks.accent, self.metronome_gain.max(0.3)),
+                    ClickKind::Normal => (&self.clicks.normal, self.metronome_gain.max(0.3)),
+                    ClickKind::Chirp => (&self.clicks.chirp, 1.0),
+                };
                 if pos < wave.len() {
-                    let s = wave[pos] * self.metronome_gain.max(0.3);
+                    let s = wave[pos] * gain;
                     self.scratch_out[f * 2] += s;
                     self.scratch_out[f * 2 + 1] += s;
-                    self.voice = Some((accent, pos + 1));
+                    self.voice = Some((kind, pos + 1));
                 } else {
                     self.voice = None;
                 }
@@ -440,6 +507,7 @@ impl RtState {
             if start <= block_end {
                 self.count_in_until = None;
                 self.playing = true;
+                self.announce_start = true;
             }
         }
     }
@@ -463,10 +531,43 @@ impl RtState {
             self.meter.process(&self.scratch_out[..n * 2]);
         }
         self.render_clicks(n);
+        // La monitorización va al final: no pasa por el máster ni se mide.
+        if let Some(m) = self.monitor.as_deref_mut() {
+            m.mix_into(&mut self.scratch_out[..n * 2]);
+        }
         self.output_clock += n as u64;
     }
 
+    #[cfg(test)]
     pub fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], channels: usize) {
+        self.render_at(out, channels, None)
+    }
+
+    /// Filtra el instante de reproducción que estima el controlador. Un callback
+    /// que llega tarde solo puede sumar error (WASAPI lo estima como «ahora +
+    /// hueco libre del buffer»), así que se conserva el desfase mínimo entre el
+    /// reloj de salida y el reloj del sistema, dejándolo subir muy despacio
+    /// (≈0,1 ms/s) para seguir la deriva entre ambos relojes.
+    fn anchor_playback(&mut self, playback_nanos: u64, frames: usize) -> u64 {
+        let clock_ns = self.output_clock as i128 * 1_000_000_000 / self.sample_rate as i128;
+        let raw = playback_nanos as i128 - clock_ns;
+        // 100 µs por segundo de audio.
+        let creep = 100_000 * frames as i128 / self.sample_rate as i128;
+        let off = match self.play_offset_ns {
+            Some(prev) => raw.min(prev + creep),
+            None => raw,
+        };
+        self.play_offset_ns = Some(off);
+        (clock_ns + off).max(0) as u64
+    }
+
+    /// Rellena el buffer del dispositivo. `playback_nanos` es el instante en que
+    /// sonará su primer frame (para alinear las grabaciones).
+    pub fn render_at<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], channels: usize, playback_nanos: Option<u64>) {
+        if let Some(t) = playback_nanos {
+            let at = self.anchor_playback(t, out.len() / channels.max(1));
+            self.shared.out_anchor.store(self.output_clock, at);
+        }
         let frames = out.len() / channels;
         let silence = T::from_sample(0.0f32);
         let (mut pk_l, mut pk_r) = (0.0f32, 0.0f32);
@@ -500,7 +601,8 @@ impl RtState {
             heard = self.loop_start;
         }
         sh.position.store(heard, Ordering::Relaxed);
-        sh.length.store(self.length(), Ordering::Relaxed);
+        let length = self.length();
+        sh.length.store(if self.free_run { length.max(self.position) } else { length }, Ordering::Relaxed);
         sh.playing.store(self.playing, Ordering::Relaxed);
         sh.counting_in.store(self.count_in_until.is_some(), Ordering::Relaxed);
         sh.loop_count.store(self.loop_count, Ordering::Relaxed);

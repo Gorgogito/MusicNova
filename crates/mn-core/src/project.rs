@@ -50,6 +50,9 @@ pub struct TrackInfo {
     /// Cadena de efectos (antes del volumen y el panorama).
     #[serde(default)]
     pub effects: Vec<EffectSlot>,
+    /// Segundo de la línea de tiempo en el que empieza la pista (grabaciones).
+    #[serde(default)]
+    pub offset: f64,
 }
 
 impl TrackInfo {
@@ -64,7 +67,13 @@ impl TrackInfo {
             mute: false,
             solo: false,
             effects: Vec::new(),
+            offset: 0.0,
         }
+    }
+
+    /// Desfase en frames a la frecuencia `rate`.
+    pub fn offset_frames(&self, rate: u32) -> u64 {
+        (self.offset.max(0.0) * rate as f64).round() as u64
     }
 }
 

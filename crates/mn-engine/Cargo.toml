@@ -12,3 +12,4 @@ mn-fx = { path = "../mn-fx" }
 cpal = "0.16"
 rtrb = "0.3"
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }

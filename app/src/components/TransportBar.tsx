@@ -18,12 +18,12 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
   return (
     <footer className="transport">
       <div className="transport-buttons">
-        <button className="icon-btn" title="Ir al inicio (Inicio)" disabled={!enabled} onClick={() => run(api.seek(0))}>
+        <button className="icon-btn" title="Ir al inicio (Inicio)" disabled={!enabled || transport.recording} onClick={() => run(api.seek(0))}>
           <Icon name="back" />
         </button>
         <button
           className="icon-btn play"
-          title={playing ? 'Pausa (Espacio)' : 'Reproducir (Espacio)'}
+          title={transport.recording ? 'Detener la grabación (Espacio)' : playing ? 'Pausa (Espacio)' : 'Reproducir (Espacio)'}
           disabled={!enabled}
           onClick={() => run(playing || transport.counting_in ? api.pause() : api.play())}
         >
@@ -33,7 +33,7 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
           className="icon-btn"
           title="Detener"
           disabled={!enabled}
-          onClick={() => run(api.pause().then(() => api.seek(0)))}
+          onClick={() => run(transport.recording ? api.pause() : api.pause().then(() => api.seek(0)))}
         >
           <Icon name="stop" />
         </button>
@@ -43,6 +43,7 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
         <span className="time-now">{formatTime(position)}</span>
         <span className="muted"> / {formatTime(duration)}</span>
         <div className="transport-badges">
+          {transport.recording && !transport.counting_in && <span className="badge rec">● REC {formatTime(transport.recorded)}</span>}
           {transport.counting_in && <span className="badge warn">Cuenta previa…</span>}
           {practice && practice.tempo !== 1 && <span className="badge">{Math.round(practice.tempo * 100)}%</span>}
           {practice && practice.pitch !== 0 && (
@@ -63,7 +64,7 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
         max={Math.max(duration, 0.001)}
         step={0.01}
         value={Math.min(position, duration)}
-        disabled={!enabled}
+        disabled={!enabled || transport.recording}
         style={{ ['--pct' as string]: `${pct}%` }}
         onChange={(e) => run(api.seek(Number(e.target.value)))}
         aria-label="Posición"

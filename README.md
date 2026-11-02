@@ -11,7 +11,8 @@ Licencia: **GPL-3.0-or-later**. Cada modelo de IA muestra su propia licencia ant
 ```
 app/            Interfaz (React + TypeScript) y shell de escritorio (Tauri 2, app/src-tauri)
 crates/mn-core    Decodificación, remuestreo, formas de onda y formato de proyecto
-crates/mn-engine  Motor de audio en tiempo real (cpal, mezcla sin bloqueos, bucle, metrónomo)
+crates/mn-engine  Motor de audio en tiempo real (cpal, mezcla sin bloqueos, bucle, metrónomo,
+                  grabación con monitorización y compensación de latencia)
 crates/mn-stretch Tempo y tono en tiempo real (Signalsmith Stretch, binding sin bindgen)
 ai-worker/      Proceso de IA en Python (JSON-RPC por stdin/stdout, trabajos cancelables,
                 gestor de modelos con manifiestos TOML y verificación SHA-256)
@@ -40,6 +41,7 @@ npm run tauri dev
 
 Pruebas del núcleo y el motor: `cargo test --workspace`.
 Probar la salida de audio: `cargo run -p mn-engine --example play [archivo]`.
+Probar la grabación (calibra la latencia y comprueba la alineación de la toma; necesita que la salida llegue al micrófono): `cargo run -p mn-engine --example record [segundos]`.
 
 Variables opcionales:
 
@@ -58,6 +60,7 @@ Variables opcionales:
 | ← / → | Retroceder / avanzar 5 s (Mayús: 1 s) |
 | [ / ] | Inicio / fin del bucle en la posición actual |
 | L | Activar o desactivar el bucle |
+| R | Grabar desde la posición actual / detener la toma (con una entrada activa) |
 | M | Añadir marcador |
 | − / = | Velocidad −5 % / +5 % |
 | , / . | Tono −1 / +1 semitono |

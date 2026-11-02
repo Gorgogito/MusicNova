@@ -7,20 +7,30 @@
 //!
 //! Funciones: mezcla multipista, tempo y tono en tiempo real (Signalsmith
 //! Stretch), bucle A-B, metrónomo sobre una rejilla de pulsos, cuenta previa,
-//! efectos por pista y en el bus máster y medición de sonoridad (LUFS).
+//! efectos por pista y en el bus máster, medición de sonoridad (LUFS) y
+//! grabación desde una entrada de audio con monitorización y compensación de
+//! latencia.
 
 mod click;
+mod input;
 mod rt;
+mod sync;
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use mn_fx::{Chain, EffectParams, EffectSlot};
+use input::{InputHandle, Monitor};
 use rt::RtState;
+use sync::{frame_instant, instant_nanos, Pair};
+
+pub use input::{input_devices, measure_latency, InputChannels, InputDeviceInfo, InputInfo, LatencyReport, Take};
 
 pub type TrackId = u64;
 
@@ -45,6 +55,8 @@ pub enum EngineError {
 pub(crate) struct EngineTrack {
     id: TrackId,
     data: Arc<Vec<f32>>,
+    /// Frame de la línea de tiempo en el que empieza la pista.
+    offset: u64,
     frames: u64,
     gain: f32,
     pan: f32,
@@ -56,6 +68,10 @@ pub(crate) struct EngineTrack {
 }
 
 impl EngineTrack {
+    fn end(&self) -> u64 {
+        self.offset + self.frames
+    }
+
     fn update_gains(&mut self) {
         (self.gain_l, self.gain_r) = mn_core::mix::balance_gains(self.gain, self.pan);
     }
@@ -88,6 +104,7 @@ pub(crate) enum Garbage {
     Track(Box<EngineTrack>),
     Beats(Box<BeatGrid>),
     Chain(Box<Chain>),
+    Monitor(Box<Monitor>),
 }
 
 pub(crate) enum Command {
@@ -114,6 +131,14 @@ pub(crate) enum Command {
     /// Cambia los parámetros de un efecto sin reconstruirlo.
     SetEffectParams(Option<TrackId>, usize, EffectParams),
     SetEffectEnabled(Option<TrackId>, usize, bool),
+    /// Grabando: el transporte sigue más allá del final de las pistas.
+    SetFreeRun(bool),
+    AttachMonitor(Box<Monitor>),
+    DetachMonitor,
+    SetMonitor { enabled: bool, gain: f32 },
+    /// Golpes de calibración: `count` barridos separados `interval` frames,
+    /// el primero `lead` frames después del bloque actual.
+    CalibrationClicks { count: u32, interval: u64, lead: u64 },
 }
 
 /// Estado publicado por el hilo de audio.
@@ -129,6 +154,12 @@ pub(crate) struct Shared {
     /// Sonoridad momentánea y a corto plazo (bits de f64).
     lufs_m: AtomicU64,
     lufs_s: AtomicU64,
+    /// (reloj de salida al inicio del último callback, instante en que suena en ns).
+    out_anchor: Pair,
+    /// (reloj de salida, posición) del último arranque del transporte.
+    play_start: Pair,
+    /// (reloj de salida del primer golpe, intervalo) de la última calibración.
+    calib: Pair,
 }
 
 impl Shared {
@@ -144,6 +175,9 @@ impl Shared {
             device_error: AtomicBool::new(false),
             lufs_m: AtomicU64::new(f64::NEG_INFINITY.to_bits()),
             lufs_s: AtomicU64::new(f64::NEG_INFINITY.to_bits()),
+            out_anchor: Pair::new(),
+            play_start: Pair::new(),
+            calib: Pair::new(),
         }
     }
 }
@@ -162,6 +196,19 @@ pub struct TransportState {
     /// Sonoridad de la salida (sin metrónomo) en LUFS; `-inf` en silencio.
     pub lufs_momentary: f64,
     pub lufs_short_term: f64,
+    pub recording: bool,
+}
+
+/// Estado de la entrada de audio abierta.
+#[derive(Clone, Copy, Debug)]
+pub struct InputLevels {
+    /// Picos de entrada (lineales) desde la última lectura.
+    pub peak_l: f32,
+    pub peak_r: f32,
+    pub recording: bool,
+    /// Segundos grabados en la toma actual.
+    pub recorded_secs: f64,
+    pub device_error: bool,
 }
 
 /// Manejador del motor; es `Send + Sync` y puede compartirse entre hilos.
@@ -175,6 +222,11 @@ pub struct Engine {
     /// Copia de la rejilla y del tempo para calcular la cuenta previa.
     beats: Mutex<Vec<u64>>,
     tempo: Mutex<f64>,
+    pitch: Mutex<f32>,
+    loop_on: AtomicBool,
+    input: Mutex<Option<Arc<InputHandle>>>,
+    /// Monitorización (activada, ganancia lineal); se conserva al reabrir la entrada.
+    monitor: Mutex<(bool, f32)>,
     shutdown: Mutex<Option<mpsc::Sender<()>>>,
 }
 
@@ -217,6 +269,10 @@ impl Engine {
             next_id: AtomicU64::new(1),
             beats: Mutex::new(Vec::new()),
             tempo: Mutex::new(1.0),
+            pitch: Mutex::new(0.0),
+            loop_on: AtomicBool::new(false),
+            input: Mutex::new(None),
+            monitor: Mutex::new((false, 1.0)),
             shutdown: Mutex::new(Some(shutdown_tx)),
         })
     }
@@ -247,6 +303,11 @@ impl Engine {
 
     /// Añade una pista (estéreo entrelazado a `sample_rate()` Hz).
     pub fn add_track(&self, data: Arc<Vec<f32>>, sample_rate: u32) -> Result<TrackId, EngineError> {
+        self.add_track_at(data, sample_rate, 0)
+    }
+
+    /// Añade una pista que empieza en el frame `offset` de la línea de tiempo.
+    pub fn add_track_at(&self, data: Arc<Vec<f32>>, sample_rate: u32, offset: u64) -> Result<TrackId, EngineError> {
         if sample_rate != self.sample_rate {
             return Err(EngineError::SampleRate { expected: self.sample_rate, got: sample_rate });
         }
@@ -255,6 +316,7 @@ impl Engine {
         let mut t = Box::new(EngineTrack {
             id,
             data,
+            offset,
             frames,
             gain: 1.0,
             pan: 0.0,
@@ -274,6 +336,7 @@ impl Engine {
     }
 
     pub fn clear(&self) -> Result<(), EngineError> {
+        self.ensure_not_recording()?;
         self.beats.lock().unwrap().clear();
         self.send(Command::Clear)
     }
@@ -295,6 +358,10 @@ impl Engine {
     /// (o de `fallback_bpm` si no hay rejilla), ajustada al tempo actual.
     pub fn play_with_count_in(&self, beats: u32, fallback_bpm: f64) -> Result<(), EngineError> {
         self.rewind_if_ended()?;
+        self.count_in_command(beats, fallback_bpm)
+    }
+
+    fn count_in_command(&self, beats: u32, fallback_bpm: f64) -> Result<(), EngineError> {
         let pos = self.shared.position.load(Ordering::Relaxed);
         let interval_src = {
             let grid = self.beats.lock().unwrap();
@@ -315,6 +382,7 @@ impl Engine {
     }
 
     pub fn seek(&self, frame: u64) -> Result<(), EngineError> {
+        self.ensure_not_recording()?;
         let len = self.shared.length.load(Ordering::Relaxed);
         self.send(Command::Seek(if len > 0 { frame.min(len) } else { frame }))
     }
@@ -348,10 +416,12 @@ impl Engine {
 
     /// Transposición en semitonos (−24..24) sin cambiar la velocidad.
     pub fn set_pitch(&self, semitones: f32) -> Result<(), EngineError> {
+        *self.pitch.lock().unwrap() = semitones;
         self.send(Command::SetPitch(semitones))
     }
 
     pub fn set_loop(&self, enabled: bool, start: u64, end: u64) -> Result<(), EngineError> {
+        self.loop_on.store(enabled && end > start, Ordering::Relaxed);
         self.send(Command::SetLoop { enabled, start, end })
     }
 
@@ -403,12 +473,165 @@ impl Engine {
             peak_r: f32::from_bits(sh.peak_r.swap(0, Ordering::Relaxed)),
             lufs_momentary: f64::from_bits(sh.lufs_m.load(Ordering::Relaxed)),
             lufs_short_term: f64::from_bits(sh.lufs_s.load(Ordering::Relaxed)),
+            recording: self.is_recording(),
         }
+    }
+
+    // ---- Entrada de audio y grabación -------------------------------------
+
+    fn ensure_not_recording(&self) -> Result<(), EngineError> {
+        if self.is_recording() {
+            Err(EngineError::Invalid("detén la grabación primero".into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.input.lock().unwrap().as_ref().is_some_and(|i| i.is_recording())
+    }
+
+    /// Abre (o reabre) una entrada de audio; `None` = dispositivo predeterminado.
+    pub fn open_input(&self, device: Option<&str>, channels: InputChannels) -> Result<InputInfo, EngineError> {
+        self.ensure_not_recording()?;
+        self.close_input();
+        let (handle, monitor) = InputHandle::open(device, channels, self.sample_rate, self.shared.clone())?;
+        if let Some(mut m) = monitor {
+            let (enabled, gain) = *self.monitor.lock().unwrap();
+            m.enabled = enabled;
+            m.gain = gain;
+            self.send(Command::AttachMonitor(Box::new(m)))?;
+        }
+        let info = handle.info.clone();
+        *self.input.lock().unwrap() = Some(Arc::new(handle));
+        Ok(info)
+    }
+
+    /// Cierra la entrada (si se está grabando, la toma se descarta).
+    pub fn close_input(&self) {
+        let _ = self.send(Command::DetachMonitor);
+        if let Some(h) = self.input.lock().unwrap().take() {
+            if h.is_recording() {
+                let _ = self.send(Command::Pause);
+                let _ = self.send(Command::SetFreeRun(false));
+                if let Ok(Some(take)) = h.stop() {
+                    let _ = std::fs::remove_file(&take.path);
+                }
+            }
+        }
+    }
+
+    pub fn input_info(&self) -> Option<InputInfo> {
+        self.input.lock().unwrap().as_ref().map(|i| i.info.clone())
+    }
+
+    /// Lee los niveles de entrada y reinicia sus picos; `None` sin entrada abierta.
+    pub fn input_levels(&self) -> Option<InputLevels> {
+        self.input.lock().unwrap().as_ref().map(|i| {
+            let (peak_l, peak_r) = i.take_peaks();
+            InputLevels {
+                peak_l,
+                peak_r,
+                recording: i.is_recording(),
+                recorded_secs: i.recorded_secs(),
+                device_error: i.device_error(),
+            }
+        })
+    }
+
+    /// Monitorización de la entrada por la salida (solo si las frecuencias coinciden).
+    pub fn set_monitor(&self, enabled: bool, gain_db: f32) -> Result<(), EngineError> {
+        let gain = mn_core::mix::db_to_gain(gain_db);
+        *self.monitor.lock().unwrap() = (enabled, gain);
+        self.send(Command::SetMonitor { enabled, gain })
+    }
+
+    /// Empieza a grabar desde la posición actual. La toma arranca cuando el
+    /// transporte empieza a sonar (tras la cuenta previa, si se pide) y se
+    /// desplaza `latency_ms` para compensar la latencia de ida y vuelta.
+    /// Requiere tempo 1×, sin transposición ni bucle.
+    pub fn start_recording(&self, path: PathBuf, latency_ms: f64, count_in: Option<(u32, f64)>) -> Result<(), EngineError> {
+        if (*self.tempo.lock().unwrap() - 1.0).abs() > 1e-6 {
+            return Err(EngineError::Invalid("para grabar, la velocidad debe estar al 100 %".into()));
+        }
+        if self.pitch.lock().unwrap().abs() > 1e-6 {
+            return Err(EngineError::Invalid("para grabar, quita la transposición de tono".into()));
+        }
+        if self.loop_on.load(Ordering::Relaxed) {
+            return Err(EngineError::Invalid("para grabar, desactiva el bucle A-B".into()));
+        }
+        let guard = self.input.lock().unwrap();
+        let input = guard.as_ref().ok_or_else(|| EngineError::Invalid("activa primero una entrada de audio".into()))?;
+        if input.is_recording() {
+            return Err(EngineError::Invalid("ya se está grabando".into()));
+        }
+        let (seq, _, _) = self.shared.play_start.load();
+        input.record(path, latency_ms, seq)?;
+        drop(guard);
+        self.send(Command::Pause)?;
+        self.send(Command::SetFreeRun(true))?;
+        match count_in {
+            Some((beats, bpm)) if beats > 0 => self.count_in_command(beats, bpm),
+            _ => self.send(Command::Play),
+        }
+    }
+
+    /// Detiene el transporte y la grabación. Devuelve la toma (`None` si no
+    /// llegó a empezar, p. ej. al parar durante la cuenta previa).
+    pub fn stop_recording(&self) -> Result<Option<Take>, EngineError> {
+        self.send(Command::Pause)?;
+        self.send(Command::SetFreeRun(false))?;
+        let input = self.input.lock().unwrap().clone();
+        match input {
+            Some(i) if i.is_recording() => i.stop(),
+            _ => Ok(None),
+        }
+    }
+
+    /// Mide la latencia de ida y vuelta: reproduce 8 barridos y los busca en la
+    /// entrada. Necesita que la salida llegue a la entrada (micrófono cerca de
+    /// los altavoces o un cable de la salida a la entrada). Tarda unos 4 s.
+    pub fn calibrate_latency(&self) -> Result<LatencyReport, EngineError> {
+        const COUNT: u32 = 8;
+        let input = self.input.lock().unwrap().clone();
+        let input = input.as_deref().ok_or_else(|| EngineError::Invalid("activa primero una entrada de audio".into()))?;
+        if input.is_recording() || self.shared.playing.load(Ordering::Relaxed) {
+            return Err(EngineError::Invalid("detén la reproducción para calibrar".into()));
+        }
+        let out_rate = self.sample_rate;
+        let in_rate = input.info.sample_rate;
+        let interval = (out_rate as f64 * 0.4) as u64;
+        let lead = (out_rate as f64 * 0.3) as u64;
+        let total = (in_rate as f64 * (0.3 + 0.4 * COUNT as f64 + 0.6)) as usize;
+        let (calib_seq, _, _) = self.shared.calib.load();
+        // La captura empieza con el siguiente bloque de entrada; los golpes, 0,3 s
+        // después de enviarlos, así que el primero cae dentro de lo capturado.
+        let (start_frame, mono) = thread::scope(|s| {
+            let h = s.spawn(|| input.capture(total, Duration::from_secs(10)));
+            thread::sleep(Duration::from_millis(30));
+            let sent = self.send(Command::CalibrationClicks { count: COUNT, interval, lead });
+            let captured = h.join().unwrap_or_else(|_| Err(EngineError::Device("fallo en la captura".into())));
+            sent.and(captured)
+        })?;
+        let (seq, first_click, interval) = self.shared.calib.load();
+        if seq == calib_seq {
+            return Err(EngineError::Device("la salida de audio no reprodujo los golpes".into()));
+        }
+        let (_, oclock, onanos) = self.shared.out_anchor.load();
+        let (iframe, inanos) = input.anchor().ok_or_else(|| EngineError::Device("la entrada no entregó audio".into()))?;
+        let expected: Vec<f64> = (0..COUNT as u64)
+            .map(|k| {
+                let t = frame_instant(oclock, onanos, first_click + k * interval, out_rate);
+                iframe as f64 + (t - inanos as i128) as f64 * in_rate as f64 / 1e9 - start_frame as f64
+            })
+            .collect();
+        measure_latency(&mono, in_rate, &expected, &click::chirp(in_rate)).map_err(EngineError::Invalid)
     }
 }
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        self.close_input();
         if let Some(tx) = self.shutdown.lock().unwrap().take() {
             let _ = tx.send(());
         }
@@ -451,7 +674,9 @@ fn build<T: SizedSample + FromSample<f32> + 'static>(
     device
         .build_output_stream(
             config,
-            move |out: &mut [T], _| rt.render(out, channels),
+            move |out: &mut [T], info: &cpal::OutputCallbackInfo| {
+                rt.render_at(out, channels, Some(instant_nanos(&info.timestamp().playback)))
+            },
             move |err| {
                 eprintln!("[mn-engine] error del stream: {err}");
                 shared.device_error.store(true, Ordering::Relaxed);
@@ -479,6 +704,7 @@ mod tests {
         let mut t = Box::new(EngineTrack {
             id,
             data: Arc::new(vec![value; frames * 2]),
+            offset: 0,
             frames: frames as u64,
             gain: 1.0,
             pan: 0.0,
@@ -576,6 +802,94 @@ mod tests {
         assert_eq!((0..5).map(|i| g.is_downbeat(i)).collect::<Vec<_>>(), vec![false, true, false, false, true]);
         let g = BeatGrid { frames: vec![0, 10, 20, 30], beats_per_bar: 3, downbeat_offset: 1, accents: Vec::new() };
         assert_eq!((0..4).map(|i| g.is_downbeat(i)).collect::<Vec<_>>(), vec![false, true, false, false]);
+    }
+
+    #[test]
+    fn offset_tracks_and_free_run() {
+        let mut late = track(2, 0.5, 4);
+        late.offset = 4;
+        let (mut rt, mut tx) = rt_with(vec![track(1, 0.25, 2), late]);
+        tx.push(Command::Play).ok();
+        let mut out = vec![0.0f32; 2 * 10];
+        rt.render(&mut out, 2);
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        assert_eq!(left, vec![0.25, 0.25, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.0, 0.0]);
+        assert!(!rt.playing, "sin grabar se detiene al final (frame 8)");
+        assert_eq!(rt.position, 8);
+
+        // Grabando, el transporte sigue más allá del final.
+        tx.push(Command::SetFreeRun(true)).ok();
+        tx.push(Command::Play).ok();
+        rt.render(&mut out, 2);
+        assert!(rt.playing);
+        assert_eq!(rt.position, 18);
+        assert_eq!(rt.shared.length.load(Ordering::Relaxed), 18, "la duración crece con la toma");
+        tx.push(Command::SetFreeRun(false)).ok();
+        rt.render(&mut out, 2);
+        assert!(!rt.playing);
+    }
+
+    #[test]
+    fn transport_start_is_announced_once() {
+        let (mut rt, mut tx) = rt_with(vec![track(1, 0.1, RATE as usize)]);
+        let mut out = vec![0.0f32; 2 * 512];
+        rt.render(&mut out, 2);
+        assert_eq!(rt.shared.play_start.load().0, 0);
+        tx.push(Command::Seek(1000)).ok();
+        tx.push(Command::Play).ok();
+        rt.render_at(&mut out, 2, Some(5_000));
+        assert_eq!(rt.shared.play_start.load(), (1, 512, 1000));
+        assert_eq!(rt.shared.out_anchor.load(), (1, 512, 5_000));
+        rt.render(&mut out, 2);
+        assert_eq!(rt.shared.play_start.load().0, 1, "solo se anuncia al arrancar");
+
+        // Con cuenta previa se anuncia cuando la música empieza de verdad.
+        tx.push(Command::Pause).ok();
+        tx.push(Command::PlayWithCountIn { beats: 1, interval: 700.0 }).ok();
+        rt.render(&mut out, 2); // reloj 1536..2048: aún en cuenta previa
+        assert_eq!(rt.shared.play_start.load().0, 1);
+        rt.render(&mut out, 2); // la cuenta termina en 2236 (dentro de este bloque)
+        rt.render(&mut out, 2); // la música arranca en el bloque siguiente
+        let (seq, clock, pos) = rt.shared.play_start.load();
+        assert_eq!((seq, clock), (2, 2560));
+        assert_eq!(pos, 1000 + 512 * 2);
+    }
+
+    #[test]
+    fn calibration_chirps_play_at_requested_frames() {
+        let (mut rt, mut tx) = rt_with(vec![]);
+        tx.push(Command::CalibrationClicks { count: 2, interval: 4000, lead: 300 }).ok();
+        let mut out = vec![0.0f32; 2 * 8000];
+        rt.render(&mut out, 2);
+        assert_eq!(rt.shared.calib.load(), (1, 300, 4000));
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        let first_sound = left.iter().position(|s| s.abs() > 1e-6).unwrap();
+        assert!((300..304).contains(&first_sound), "{first_sound}");
+        assert!(left[..300].iter().all(|&s| s == 0.0));
+        assert!(left[4300..4600].iter().any(|s| s.abs() > 0.1), "segundo barrido");
+    }
+
+    #[test]
+    fn monitor_input_reaches_output_unmetered() {
+        let (mut rt, mut tx) = rt_with(vec![]);
+        let (mut mtx, mrx) = rtrb::RingBuffer::new(48_000);
+        let mut m = Monitor::new(mrx, RATE);
+        m.enabled = true;
+        m.gain = 0.5;
+        tx.push(Command::AttachMonitor(Box::new(m))).ok();
+        for _ in 0..2048 {
+            mtx.push(0.4).unwrap();
+        }
+        let mut out = vec![0.0f32; 2 * 512];
+        rt.render(&mut out, 2);
+        assert!(out.iter().all(|&s| (s - 0.2).abs() < 1e-6));
+        tx.push(Command::SetMonitor { enabled: false, gain: 1.0 }).ok();
+        rt.render(&mut out, 2);
+        assert!(out.iter().all(|&s| s == 0.0));
+        assert!(rt.shared.lufs_m.load(Ordering::Relaxed) == f64::NEG_INFINITY.to_bits(), "no se mide");
+        tx.push(Command::DetachMonitor).ok();
+        rt.render(&mut out, 2);
+        assert!(rt.monitor.is_none());
     }
 
     fn limiter(ceiling_db: f32) -> Vec<EffectSlot> {

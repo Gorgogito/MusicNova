@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from 'react'
+import { ask } from '@tauri-apps/plugin-dialog'
 import {
   api,
   errorMessage,
+  timelineEnd,
   type Analysis,
   type EffectSlot,
   type Lyrics,
@@ -11,7 +13,10 @@ import {
   type SeparationResult,
   type TrackInfo,
   type TrackView,
+  type TransportEvent,
 } from '../lib/api'
+import { RecordPanel } from '../components/RecordPanel'
+import type { Recorder } from '../lib/useRecorder'
 import { PracticePanel } from '../components/PracticePanel'
 import type { SeparationJob } from '../lib/useSeparation'
 import { SeparationPanel } from '../components/SeparationPanel'
@@ -33,7 +38,9 @@ import type { Notation } from '../lib/chords'
 
 interface Props {
   project: ProjectView
-  position: number
+  transport: TransportEvent
+  recorder: Recorder
+  onTrackRemoved: (trackId: string) => void
   onTrackChange: (t: TrackInfo) => void
   onError: (msg: string) => void
   separation: {
@@ -63,13 +70,15 @@ interface Props {
   masterWarnings: string[]
 }
 
-type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master'
+type Panel = 'separate' | 'export' | 'practice' | 'analysis' | 'lyrics' | 'mix' | 'master' | 'record'
 
 const HEADER_W = 280
 
 export function StudioView({
   project,
-  position,
+  transport,
+  recorder,
+  onTrackRemoved,
   onTrackChange,
   onError,
   separation,
@@ -85,11 +94,18 @@ export function StudioView({
   masterJob,
   masterWarnings,
 }: Props) {
+  const position = transport.position
+  const recording = transport.recording
   const practice = project.project.practice
   const hasStems = project.tracks.some((t) => t.kind !== 'mix')
+  const hasMix = project.tracks.some((t) => t.kind === 'mix')
   const analysis = project.analysis
-  const [panel, setPanel] = useState<Panel | null>(hasStems ? (analysis ? 'analysis' : 'practice') : 'separate')
-  const shownPanel = separation.job
+  const [panel, setPanel] = useState<Panel | null>(
+    !hasMix ? 'record' : hasStems ? (analysis ? 'analysis' : 'practice') : 'separate',
+  )
+  const shownPanel = recording
+    ? 'record'
+    : separation.job
     ? 'separate'
     : analysisJob.job
       ? 'analysis'
@@ -135,7 +151,9 @@ export function StudioView({
     onAnalysisChange(a)
     api.analysisUpdate(a).then(onAnalysisChange).catch((err) => onError(errorMessage(err)))
   }
-  const duration = useMemo(() => Math.max(0.001, ...project.tracks.map((t) => t.duration)), [project])
+  const tracksEnd = useMemo(() => timelineEnd(project.tracks), [project])
+  // Mientras se graba, la línea de tiempo crece con la toma.
+  const duration = Math.max(0.001, tracksEnd, recording ? position + 1 : 0)
   const anySolo = project.tracks.some((t) => t.solo)
   const lanesRef = useRef<HTMLDivElement>(null)
 
@@ -148,7 +166,23 @@ export function StudioView({
     return Math.max(0, Math.min(1, x / (rect.width - HEADER_W))) * duration
   }
 
-  const seek = (t: number) => api.seek(t).catch((err) => onError(errorMessage(err)))
+  const seek = (t: number) => {
+    if (!recording) api.seek(t).catch((err) => onError(errorMessage(err)))
+  }
+
+  const removeTrack = async (t: TrackView) => {
+    const ok = await ask(`¿Eliminar «${t.name}»? El audio de la toma se borrará del proyecto.`, {
+      title: 'Eliminar pista',
+      kind: 'warning',
+      okLabel: 'Eliminar',
+      cancelLabel: 'Cancelar',
+    })
+    if (!ok) return
+    api
+      .trackRemove(t.id)
+      .then(() => onTrackRemoved(t.id))
+      .catch((err) => onError(errorMessage(err)))
+  }
 
   const seekFromEvent = (e: React.MouseEvent) => {
     const t = timeAt(e.clientX)
@@ -207,11 +241,17 @@ export function StudioView({
         <div>
           <h1>{project.project.name}</h1>
           <p className="muted">
-            {project.tracks.length} {project.tracks.length === 1 ? 'pista' : 'pistas'} · {formatTime(duration)} ·{' '}
+            {project.tracks.length} {project.tracks.length === 1 ? 'pista' : 'pistas'} · {formatTime(tracksEnd)} ·{' '}
             {project.sample_rate / 1000} kHz
           </p>
         </div>
         <div className="toolbar">
+          <button
+            className={`btn ${shownPanel === 'record' ? 'active' : ''}`}
+            onClick={() => setPanel(panel === 'record' ? null : 'record')}
+          >
+            <Icon name="mic" size={16} /> Grabar
+          </button>
           <button
             className={`btn ${shownPanel === 'separate' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'separate' ? null : 'separate')}
@@ -257,6 +297,9 @@ export function StudioView({
         </div>
       </header>
 
+      {shownPanel === 'record' && (
+        <RecordPanel recorder={recorder} transport={transport} practice={practice} onPracticeChange={onPracticeChange} />
+      )}
       {shownPanel === 'separate' && (
         <SeparationPanel
           job={separation.job}
@@ -404,6 +447,16 @@ export function StudioView({
                   >
                     FX
                   </button>
+                  {t.kind === 'recording' && (
+                    <button
+                      className="icon-btn lane-remove"
+                      title="Eliminar la toma"
+                      disabled={recording}
+                      onClick={() => removeTrack(t)}
+                    >
+                      <Icon name="trash" size={14} />
+                    </button>
+                  )}
                 </div>
                 <label className="lane-slider" title={`Volumen: ${t.gain_db.toFixed(1)} dB (doble clic: 0 dB)`}>
                   <span className="small muted">Vol</span>
@@ -438,6 +491,7 @@ export function StudioView({
                 <Waveform
                   peaks={t.peaks}
                   timelineDuration={duration}
+                  offset={t.offset}
                   sampleRate={project.sample_rate}
                   color={kind.color}
                   dimmed={!audible}
@@ -452,6 +506,15 @@ export function StudioView({
             <div
               className={`loop-region ${loopView.on ? 'on' : ''}`}
               style={{ left: `${(loopView.a / duration) * 100}%`, width: `${((loopView.b - loopView.a) / duration) * 100}%` }}
+            />
+          )}
+          {recording && recorder.startedAt != null && !transport.counting_in && position > recorder.startedAt && (
+            <div
+              className="record-region"
+              style={{
+                left: `${(recorder.startedAt / duration) * 100}%`,
+                width: `${((position - recorder.startedAt) / duration) * 100}%`,
+              }}
             />
           )}
           {practice.markers.map((m) => (

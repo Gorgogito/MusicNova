@@ -19,7 +19,7 @@ use mn_core::master::{auto_master, with_auto_limiter};
 use mn_core::project::{
     sanitize_dir_name, BeatSource, MasterSettings, PracticeSettings, Project, TrackInfo, TrackKind, PROJECT_FILE,
 };
-use mn_engine::{Engine, TrackId};
+use mn_engine::{Engine, InputChannels, InputDeviceInfo, InputInfo, LatencyReport, TrackId};
 use mn_fx::{loudness, EffectSlot};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -66,7 +66,7 @@ struct AppInfo {
     ffmpeg_available: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct TrackView {
     #[serde(flatten)]
     info: TrackInfo,
@@ -104,6 +104,11 @@ struct TransportEvent {
     /// LUFS momentáneo y a corto plazo (`null` en silencio).
     lufs_m: Option<f64>,
     lufs_s: Option<f64>,
+    recording: bool,
+    /// Picos de la entrada abierta (`null` sin entrada).
+    input_peak: Option<[f32; 2]>,
+    /// Segundos grabados en la toma actual.
+    recorded: f64,
 }
 
 fn finite(v: f64) -> Option<f64> {
@@ -170,14 +175,7 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
         }
         let data = Arc::new(buf.data);
         buffers.insert(info.id, data.clone());
-        let id = engine.add_track(data, rate).map_err(err)?;
-        engine.set_gain_db(id, info.gain_db).map_err(err)?;
-        engine.set_pan(id, info.pan).map_err(err)?;
-        engine.set_mute(id, info.mute).map_err(err)?;
-        engine.set_solo(id, info.solo).map_err(err)?;
-        if !info.effects.is_empty() {
-            engine.set_effects(Some(id), &info.effects).map_err(err)?;
-        }
+        let id = add_to_engine(engine, info, data, rate)?;
         ids.insert(info.id, id);
         tracks.push(TrackView { info: info.clone(), duration, peaks });
     }
@@ -193,7 +191,7 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
     });
     engine.set_effects(None, &project.master.effects).map_err(err)?;
     engine.set_master_gain_db(project.master.gain_db).map_err(err)?;
-    let length = buffers.values().map(|b| (b.len() / 2) as u64).max().unwrap_or(0);
+    let length = timeline_length(&project, &buffers, rate);
     apply_practice(engine, &project.practice, None, analysis.as_ref(), length)?;
 
     let view = ProjectView {
@@ -212,6 +210,29 @@ fn load_into_engine(state: &AppState, dir: PathBuf, project: Project) -> Result<
     s.native_rate = native_rate;
     s.analysis = analysis;
     Ok(view)
+}
+
+/// Añade una pista al motor con su desfase, volumen, panorama y efectos.
+fn add_to_engine(engine: &Engine, info: &TrackInfo, data: Arc<Vec<f32>>, rate: u32) -> Result<TrackId, String> {
+    let id = engine.add_track_at(data, rate, info.offset_frames(rate)).map_err(err)?;
+    engine.set_gain_db(id, info.gain_db).map_err(err)?;
+    engine.set_pan(id, info.pan).map_err(err)?;
+    engine.set_mute(id, info.mute).map_err(err)?;
+    engine.set_solo(id, info.solo).map_err(err)?;
+    if !info.effects.is_empty() {
+        engine.set_effects(Some(id), &info.effects).map_err(err)?;
+    }
+    Ok(id)
+}
+
+/// Duración de la línea de tiempo en frames del motor (pistas con su desfase).
+fn timeline_length(project: &Project, buffers: &HashMap<Uuid, Arc<Vec<f32>>>, rate: u32) -> u64 {
+    project
+        .tracks
+        .iter()
+        .filter_map(|t| buffers.get(&t.id).map(|b| t.offset_frames(rate) + (b.len() / 2) as u64))
+        .max()
+        .unwrap_or(0)
 }
 
 fn unique_dir(root: &Path, name: &str) -> PathBuf {
@@ -277,6 +298,22 @@ async fn import_audio(app: AppHandle, path: String) -> Result<ProjectView, Strin
     .map_err(err)?
 }
 
+/// Crea un proyecto sin audio (para empezar grabando).
+#[tauri::command]
+async fn create_project(app: AppHandle, name: String) -> Result<ProjectView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let name = if name.trim().is_empty() { "Proyecto nuevo".to_string() } else { name.trim().to_string() };
+        let dir = unique_dir(&state.projects_root, &name);
+        Project::create_dirs(&dir).map_err(err)?;
+        let mut project = Project::new(name);
+        project.save(&dir).map_err(err)?;
+        load_into_engine(&state, dir, project)
+    })
+    .await
+    .map_err(err)?
+}
+
 #[tauri::command]
 async fn open_project(app: AppHandle, dir: String) -> Result<ProjectView, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -332,7 +369,8 @@ fn apply_practice(
                 engine.set_beats_with_accents(frames, accents).map_err(err)?;
             }
             _ => {
-                let beats = p.manual_beats(engine.sample_rate(), length);
+                // Diez minutos más allá del final: se puede grabar después de la última pista.
+                let beats = p.manual_beats(engine.sample_rate(), length + engine.sample_rate() as u64 * 600);
                 engine.set_beats(beats, p.beats_per_bar, p.manual_downbeat_offset()).map_err(err)?;
             }
         }
@@ -366,7 +404,7 @@ fn practice_set(state: State<'_, AppState>, settings: PracticeSettings) -> Resul
     let settings = sanitize_practice(settings);
     let mut guard = state.session.lock().unwrap();
     let s = &mut *guard;
-    let length = s.buffers.values().map(|b| (b.len() / 2) as u64).max().unwrap_or(0);
+    let length = s.project.as_ref().map_or(0, |p| timeline_length(p, &s.buffers, engine.sample_rate()));
     let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
     apply_practice(engine, &settings, Some(&project.practice), s.analysis.as_ref(), length)?;
     project.practice = settings.clone();
@@ -389,8 +427,12 @@ fn transport_play(state: State<'_, AppState>, count_in: Option<bool>) -> Result<
 }
 
 #[tauri::command]
-fn transport_pause(state: State<'_, AppState>) -> Result<(), String> {
-    state.engine()?.pause().map_err(err)
+async fn transport_pause(app: AppHandle) -> Result<(), String> {
+    let recording = app.state::<AppState>().engine()?.is_recording();
+    if recording {
+        return finish_recording(app).await;
+    }
+    app.state::<AppState>().engine()?.pause().map_err(err)
 }
 
 #[tauri::command]
@@ -611,7 +653,7 @@ fn analysis_apply(state: State<'_, AppState>) -> Result<AnalysisApplied, String>
     let s = &mut *guard;
     let dir = s.dir.clone().ok_or("no hay ningún proyecto abierto")?;
     let analysis = Analysis::load(&dir).map_err(err)?.ok_or("el análisis no generó resultados")?;
-    let length = s.buffers.values().map(|b| (b.len() / 2) as u64).max().unwrap_or(0);
+    let length = s.project.as_ref().map_or(0, |p| timeline_length(p, &s.buffers, engine.sample_rate()));
     let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
     let mut p = project.practice.clone();
     p.beat_source = BeatSource::Detected;
@@ -643,7 +685,7 @@ fn analysis_update(state: State<'_, AppState>, analysis: Analysis) -> Result<Ana
     let beats_changed =
         s.analysis.as_ref().map_or(true, |a| a.beats != analysis.beats || a.downbeats != analysis.downbeats);
     if beats_changed {
-        let length = s.buffers.values().map(|b| (b.len() / 2) as u64).max().unwrap_or(0);
+        let length = s.project.as_ref().map_or(0, |p| timeline_length(p, &s.buffers, engine.sample_rate()));
         if let Some(p) = s.project.as_ref() {
             apply_practice(engine, &p.practice, None, Some(&analysis), length)?;
         }
@@ -746,6 +788,7 @@ fn render_premaster(state: &AppState) -> Result<(AudioBuffer, Project, PathBuf, 
         .filter_map(|t| {
             buffers.get(&t.id).map(|d| MixInput {
                 data: d,
+                offset: t.offset_frames(rate) as usize,
                 gain_db: t.gain_db,
                 pan: t.pan,
                 mute: t.mute,
@@ -951,6 +994,7 @@ async fn export_mix(app: AppHandle, path: String, format: ExportFormat) -> Resul
                     .get(&t.id)
                     .map(|d| MixInput {
                         data: d,
+                        offset: t.offset_frames(rate) as usize,
                         gain_db: t.gain_db,
                         pan: t.pan,
                         mute: t.mute,
@@ -997,8 +1041,14 @@ async fn export_stems(app: AppHandle, dir: String, format: ExportFormat) -> Resu
                         sanitize_dir_name(&t.name),
                         format.extension()
                     ));
+                    let offset = t.offset;
                     s.spawn(move || {
-                        let buf = audio::decode_file(&src).map_err(err)?;
+                        let mut buf = audio::decode_file(&src).map_err(err)?;
+                        // Las tomas grabadas a mitad de canción se alinean con silencio delante.
+                        let pad = (offset.max(0.0) * buf.sample_rate as f64).round() as usize * 2;
+                        if pad > 0 {
+                            buf.data.splice(0..0, std::iter::repeat_n(0.0, pad));
+                        }
                         export_audio(&dest, &buf, format).map_err(err)?;
                         Ok(dest.display().to_string())
                     })
@@ -1012,6 +1062,157 @@ async fn export_stems(app: AppHandle, dir: String, format: ExportFormat) -> Resu
     .map_err(err)?
 }
 
+// ---- Grabación ---------------------------------------------------------------
+
+/// Carpeta (relativa al proyecto) de las tomas grabadas.
+const RECORDINGS_DIR: &str = "audio/recordings/";
+
+#[tauri::command]
+fn input_devices() -> Vec<InputDeviceInfo> {
+    mn_engine::input_devices()
+}
+
+/// Abre una entrada de audio (`device = null`: la predeterminada del sistema).
+#[tauri::command]
+async fn input_open(app: AppHandle, device: Option<String>, channels: InputChannels) -> Result<InputInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.engine()?.open_input(device.as_deref(), channels).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+fn input_close(state: State<'_, AppState>) -> Result<(), String> {
+    let engine = state.engine()?;
+    if engine.is_recording() {
+        return Err("detén la grabación antes de cerrar la entrada".into());
+    }
+    engine.close_input();
+    Ok(())
+}
+
+#[tauri::command]
+fn input_monitor(state: State<'_, AppState>, enabled: bool, gain_db: f32) -> Result<(), String> {
+    state.engine()?.set_monitor(enabled, gain_db.clamp(-60.0, 12.0)).map_err(err)
+}
+
+/// Empieza a grabar en la posición actual (con la cuenta previa de práctica).
+#[tauri::command]
+fn record_start(state: State<'_, AppState>, latency_ms: f64) -> Result<(), String> {
+    let engine = state.engine()?;
+    let (dir, project) = session_snapshot(&state)?;
+    let rec_dir = dir.join(RECORDINGS_DIR);
+    std::fs::create_dir_all(&rec_dir).map_err(err)?;
+    let path = (1..)
+        .map(|n| rec_dir.join(format!("toma_{n:03}.wav")))
+        .find(|p| !p.exists())
+        .ok_or("no se pudo elegir un nombre para la toma")?;
+    let p = &project.practice;
+    let count_in = (p.count_in_bars > 0).then(|| (p.count_in_bars * p.beats_per_bar, p.bpm));
+    engine.start_recording(path, latency_ms.clamp(-500.0, 1000.0), count_in).map_err(err)
+}
+
+#[derive(Clone, Serialize)]
+struct RecordFinished {
+    track: Option<TrackView>,
+    message: Option<String>,
+}
+
+/// Detiene la grabación y añade la toma como pista nueva. El resultado se
+/// publica en el evento `record-finished` (se puede parar desde varios sitios).
+#[tauri::command]
+async fn record_stop(app: AppHandle) -> Result<(), String> {
+    finish_recording(app).await
+}
+
+async fn finish_recording(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let take = state.engine()?.stop_recording().map_err(err)?;
+        let result = match take {
+            None => RecordFinished { track: None, message: Some("La grabación no llegó a empezar.".into()) },
+            Some(take) => add_take(&state, take)?,
+        };
+        let _ = app.emit("record-finished", result);
+        Ok(())
+    })
+    .await
+    .map_err(err)?
+}
+
+fn add_take(state: &AppState, take: mn_engine::Take) -> Result<RecordFinished, String> {
+    if take.frames < take.sample_rate as u64 / 4 {
+        let _ = std::fs::remove_file(&take.path);
+        return Ok(RecordFinished { track: None, message: Some("La toma duraba menos de 0,25 s y se descartó.".into()) });
+    }
+    let engine = state.engine()?;
+    let rate = engine.sample_rate();
+    let decoded = audio::decode_file(&take.path).map_err(err)?;
+    let buf = audio::resample(&decoded, rate).map_err(err)?;
+    let peaks = compute_peaks(&buf, (rate / 100) as usize);
+    let duration = buf.duration_secs();
+
+    let mut guard = state.session.lock().unwrap();
+    let s = &mut *guard;
+    let dir = s.dir.clone().ok_or("no hay ningún proyecto abierto")?;
+    let rel = take
+        .path
+        .strip_prefix(&dir)
+        .map_err(|_| "la toma está fuera del proyecto".to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
+    let n = project.tracks.iter().filter(|t| t.kind == TrackKind::Recording).count() + 1;
+    let mut info = TrackInfo::new(format!("Toma {n}"), TrackKind::Recording, rel);
+    info.offset = take.offset_secs;
+    let data = Arc::new(buf.data);
+    let id = add_to_engine(engine, &info, data.clone(), rate)?;
+    project.tracks.push(info.clone());
+    project.save(&dir).map_err(err)?;
+    s.engine_ids.insert(info.id, id);
+    s.buffers.insert(info.id, data);
+    let message = (take.dropped_frames > 0).then(|| {
+        format!(
+            "Se perdieron {:.0} ms de audio porque el disco no siguió el ritmo de la grabación.",
+            take.dropped_frames as f64 / take.sample_rate as f64 * 1000.0
+        )
+    });
+    Ok(RecordFinished { track: Some(TrackView { info, duration, peaks }), message })
+}
+
+/// Mide la latencia de ida y vuelta de la entrada y la salida actuales.
+#[tauri::command]
+async fn record_calibrate(app: AppHandle) -> Result<LatencyReport, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().engine()?.calibrate_latency().map_err(err))
+        .await
+        .map_err(err)?
+}
+
+/// Quita una pista del proyecto. El audio de las tomas grabadas se borra; el
+/// de las demás pistas se conserva en la carpeta del proyecto.
+#[tauri::command]
+fn track_remove(state: State<'_, AppState>, track_id: Uuid) -> Result<(), String> {
+    let engine = state.engine()?;
+    let mut guard = state.session.lock().unwrap();
+    let s = &mut *guard;
+    let dir = s.dir.clone().ok_or("no hay ningún proyecto abierto")?;
+    let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
+    let index = project.tracks.iter().position(|t| t.id == track_id).ok_or("pista desconocida")?;
+    if let Some(id) = s.engine_ids.remove(&track_id) {
+        engine.remove_track(id).map_err(err)?;
+    }
+    s.buffers.remove(&track_id);
+    let track = project.tracks.remove(index);
+    project.save(&dir).map_err(err)?;
+    if track.file.starts_with(RECORDINGS_DIR) {
+        let _ = std::fs::remove_file(project.track_path(&dir, &track));
+    }
+    Ok(())
+}
+
+
 /// Publica el estado del transporte a ~30 Hz mientras suena (y a 2 Hz en reposo).
 fn spawn_transport_events(app: AppHandle) {
     std::thread::Builder::new()
@@ -1023,8 +1224,9 @@ fn spawn_transport_events(app: AppHandle) {
                 let state = app.state::<AppState>();
                 let Some(engine) = state.engine.as_ref() else { return };
                 let s = engine.state();
+                let input = engine.input_levels();
                 idle_ticks += 1;
-                if !s.playing && !s.counting_in && idle_ticks < 15 {
+                if !s.playing && !s.counting_in && input.is_none() && idle_ticks < 15 {
                     continue;
                 }
                 idle_ticks = 0;
@@ -1041,6 +1243,9 @@ fn spawn_transport_events(app: AppHandle) {
                         peak_r: s.peak_r,
                         lufs_m: finite(s.lufs_momentary),
                         lufs_s: finite(s.lufs_short_term),
+                        recording: s.recording,
+                        input_peak: input.map(|i| [i.peak_l, i.peak_r]),
+                        recorded: input.map_or(0.0, |i| i.recorded_secs),
                     },
                 );
             }
@@ -1080,6 +1285,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             import_audio,
+            create_project,
             open_project,
             list_projects,
             transport_play,
@@ -1106,12 +1312,23 @@ pub fn run() {
             master_auto,
             master_reference_start,
             master_reference_apply,
+            input_devices,
+            input_open,
+            input_close,
+            input_monitor,
+            record_start,
+            record_stop,
+            record_calibrate,
+            track_remove,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar MusicNova");
 
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
+            if let Some(e) = handle.state::<AppState>().engine.as_ref() {
+                e.close_input();
+            }
             handle.state::<AppState>().worker.stop();
         }
     });
