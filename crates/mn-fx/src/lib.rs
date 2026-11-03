@@ -377,11 +377,35 @@ pub trait Processor: Send {
     fn latency(&self) -> usize {
         0
     }
+    /// Plugins externos: cambia el parámetro `id` (en su propio dominio de
+    /// valores) a partir del siguiente bloque. Sin reservar memoria.
+    fn set_plugin_param(&mut self, _id: u32, _value: f64) {}
     /// Procesa con una señal de control externa (`key`, mismo tamaño que
     /// `buf`). Por defecto se ignora.
     fn process_keyed(&mut self, buf: &mut [f32], _key: &[f32]) {
         self.process(buf)
     }
+}
+
+/// Nota que llega a un instrumento en vivo dentro de un bloque.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveNote {
+    /// Frame dentro del bloque.
+    pub time: u32,
+    pub key: u8,
+    /// 1–127 al pulsar (0 en las liberaciones).
+    pub velocity: u8,
+    pub on: bool,
+}
+
+/// Instrumento que suena en tiempo real (teclado MIDI): el sintetizador
+/// integrado o un plugin instrumento. Nada de lo que hace reserva memoria.
+pub trait Instrument: Send {
+    /// Escribe en `buf` (estéreo entrelazado, lo sobrescribe) el sonido del
+    /// bloque con las notas que empiezan o terminan en él (ordenadas por `time`).
+    fn render(&mut self, notes: &[LiveNote], buf: &mut [f32]);
+    /// Suelta todas las notas (al desarmar la pista o pedirlo el teclado).
+    fn all_notes_off(&mut self);
 }
 
 /// Crea el procesador de un efecto (reserva memoria: fuera del hilo de audio).
@@ -460,6 +484,13 @@ impl Chain {
     /// Cambia los parámetros de un efecto sin reconstruir la cadena.
     pub fn set_params(&mut self, index: usize, params: &EffectParams) -> bool {
         self.slots.get_mut(index).is_some_and(|(_, p)| p.set_params(&params.sanitized()))
+    }
+
+    /// Parámetro de un plugin externo de la cadena (automatización).
+    pub fn set_plugin_param(&mut self, index: usize, id: u32, value: f64) {
+        if let Some((_, p)) = self.slots.get_mut(index) {
+            p.set_plugin_param(id, value);
+        }
     }
 
     pub fn set_enabled(&mut self, index: usize, enabled: bool) {

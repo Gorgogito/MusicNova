@@ -167,7 +167,12 @@ pub async fn instrument_set(app: AppHandle, track_id: Uuid, source: InstrumentSo
             t.instrument = Some(source);
             p.save(&dir).map_err(err)?;
         }
-        rerender(&state, track_id)
+        let view = rerender(&state, track_id)?;
+        // Armada: lo que se toque suena ya con el instrumento nuevo.
+        if crate::live::armed() == Some(track_id) {
+            crate::live::arm(&state, Some(track_id))?;
+        }
+        Ok(view)
     })
     .await
     .map_err(err)?

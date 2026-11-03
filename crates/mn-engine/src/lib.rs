@@ -13,6 +13,9 @@
 
 mod click;
 mod input;
+mod live;
+#[cfg(windows)]
+mod midi;
 mod rt;
 mod sync;
 
@@ -27,12 +30,20 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use mn_core::automation::ChannelAutomation;
 use mn_core::mix::{clips_end, ClipFrames};
-use mn_fx::{Chain, EffectParams, EffectSlot};
+use mn_fx::{Chain, EffectParams, EffectSlot, Instrument};
 use input::{InputHandle, Monitor};
 use rt::RtState;
 use sync::{frame_instant, instant_nanos, Pair};
 
 pub use input::{input_devices, measure_latency, InputChannels, InputDeviceInfo, InputInfo, LatencyReport, Take};
+pub use live::{now_ns, pair_notes, MidiEvent, MidiMessage, MidiSink, RecEvent};
+#[cfg(windows)]
+pub use midi::{midi_inputs, parse_short, MidiInput};
+
+/// Eventos MIDI pendientes como máximo (teclado → hilo de audio).
+const MIDI_CAPACITY: usize = 4096;
+/// Notas grabadas como máximo entre dos lecturas (unos 1 MB).
+const REC_CAPACITY: usize = 1 << 16;
 
 pub type TrackId = u64;
 
@@ -155,6 +166,7 @@ pub(crate) enum Garbage {
     Clips(Vec<ClipFrames>),
     Automation(Box<ChannelAutomation>),
     Data(Arc<Vec<f32>>),
+    Instrument(Box<dyn Instrument>),
 }
 
 pub(crate) enum Command {
@@ -195,6 +207,10 @@ pub(crate) enum Command {
     /// Golpes de calibración: `count` barridos separados `interval` frames,
     /// el primero `lead` frames después del bloque actual.
     CalibrationClicks { count: u32, interval: u64, lead: u64 },
+    /// Arma una pista con su instrumento en vivo (`None`: ninguna).
+    SetLive(Option<(TrackId, Box<dyn Instrument>)>),
+    /// Grabar lo que se toca mientras el transporte avanza.
+    SetMidiRecord(bool),
 }
 
 /// Estado publicado por el hilo de audio.
@@ -284,6 +300,8 @@ pub struct Engine {
     /// Monitorización (activada, ganancia lineal); se conserva al reabrir la entrada.
     monitor: Mutex<(bool, f32)>,
     shutdown: Mutex<Option<mpsc::Sender<()>>>,
+    midi: MidiSink,
+    rec: Mutex<rtrb::Consumer<RecEvent>>,
 }
 
 impl Engine {
@@ -291,6 +309,8 @@ impl Engine {
     pub fn start() -> Result<Self, EngineError> {
         let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(COMMAND_CAPACITY);
         let (garbage_tx, garbage_rx) = rtrb::RingBuffer::new(MAX_TRACKS * 2);
+        let (midi_tx, midi_rx) = rtrb::RingBuffer::new(MIDI_CAPACITY);
+        let (rec_tx, rec_rx) = rtrb::RingBuffer::new(REC_CAPACITY);
         let shared = Arc::new(Shared::new());
 
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(u32, String), EngineError>>();
@@ -300,7 +320,7 @@ impl Engine {
         // El stream de cpal no es `Send` en todas las plataformas: vive en su propio hilo.
         thread::Builder::new()
             .name("mn-audio".into())
-            .spawn(move || match open_stream(cmd_rx, garbage_tx, shared_rt) {
+            .spawn(move || match open_stream(cmd_rx, garbage_tx, shared_rt, midi_rx, rec_tx) {
                 Ok((stream, rate, name)) => {
                     let _ = ready_tx.send(Ok((rate, name)));
                     let _ = shutdown_rx.recv();
@@ -330,7 +350,35 @@ impl Engine {
             input: Mutex::new(None),
             monitor: Mutex::new((false, 1.0)),
             shutdown: Mutex::new(Some(shutdown_tx)),
+            midi: MidiSink { tx: Arc::new(Mutex::new(midi_tx)) },
+            rec: Mutex::new(rec_rx),
         })
+    }
+
+    /// Por dónde enviar notas al instrumento en vivo.
+    pub fn midi_sink(&self) -> MidiSink {
+        self.midi.clone()
+    }
+
+    /// Arma la pista `track` con `instrument` (lo que se toque suena por sus
+    /// efectos y su fader) o desarma con `None`.
+    pub fn set_live_instrument(&self, live: Option<(TrackId, Box<dyn Instrument>)>) -> Result<(), EngineError> {
+        self.send(Command::SetLive(live))
+    }
+
+    /// Activa o desactiva la grabación de lo que se toca (solo con el transporte en marcha).
+    pub fn set_midi_record(&self, on: bool) -> Result<(), EngineError> {
+        self.send(Command::SetMidiRecord(on))
+    }
+
+    /// Notas tocadas desde la última lectura (posiciones en frames del motor).
+    pub fn take_midi_recording(&self) -> Vec<RecEvent> {
+        let mut rx = self.rec.lock().unwrap();
+        let mut out = Vec::with_capacity(rx.slots());
+        while let Ok(e) = rx.pop() {
+            out.push(e);
+        }
+        out
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -730,6 +778,8 @@ fn open_stream(
     commands: rtrb::Consumer<Command>,
     garbage: rtrb::Producer<Garbage>,
     shared: Arc<Shared>,
+    midi: rtrb::Consumer<MidiEvent>,
+    rec: rtrb::Producer<RecEvent>,
 ) -> Result<(cpal::Stream, u32, String), EngineError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(EngineError::NoDevice)?;
@@ -737,7 +787,8 @@ fn open_stream(
     let supported = device.default_output_config().map_err(|e| EngineError::Device(e.to_string()))?;
     let rate = supported.sample_rate().0;
     let config: cpal::StreamConfig = supported.config();
-    let rt = RtState::new(rate, commands, garbage, shared, MAX_TRACKS);
+    let mut rt = RtState::new(rate, commands, garbage, shared, MAX_TRACKS);
+    rt.attach_midi(midi, rec);
 
     let stream = match supported.sample_format() {
         SampleFormat::F32 => build::<f32>(&device, &config, rt),
@@ -1202,5 +1253,115 @@ mod tests {
         rt.render(&mut out, 2);
         rt.render(&mut out, 2);
         assert!(rt.playing && rt.position > 0, "arranca tras la cuenta previa");
+    }
+
+    // ---- Instrumento en vivo -------------------------------------------------------
+
+    struct Live {
+        rt: RtState,
+        cmd: rtrb::Producer<Command>,
+        midi: rtrb::Producer<MidiEvent>,
+        rec: rtrb::Consumer<RecEvent>,
+    }
+
+    fn live_rt(timbre: mn_core::transcription::Timbre) -> Live {
+        let (mut rt, mut cmd) = rt_with(vec![track(1, 0.0, RATE as usize * 4)]);
+        let (midi, midi_rx) = rtrb::RingBuffer::new(64);
+        let (rec_tx, rec) = rtrb::RingBuffer::new(64);
+        rt.attach_midi(midi_rx, rec_tx);
+        let synth: Box<dyn Instrument> = Box::new(mn_core::livesynth::LiveSynth::new(timbre, RATE));
+        cmd.push(Command::SetLive(Some((1, synth)))).ok().unwrap();
+        Live { rt, cmd, midi, rec }
+    }
+
+    fn press(l: &mut Live, key: u8, time_ns: u64) {
+        l.midi.push(MidiEvent { msg: MidiMessage::NoteOn { key, velocity: 100 }, time_ns }).unwrap();
+    }
+
+    fn release(l: &mut Live, key: u8, time_ns: u64) {
+        l.midi.push(MidiEvent { msg: MidiMessage::NoteOff { key }, time_ns }).unwrap();
+    }
+
+    fn block(l: &mut Live, frames: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; frames * 2];
+        l.rt.render(&mut out, 2);
+        out
+    }
+
+    fn crossings_hz(out: &[f32]) -> f64 {
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        left.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (left.len() as f64 / RATE as f64)
+    }
+
+    #[test]
+    fn live_instrument_sounds_with_the_transport_stopped() {
+        let mut l = live_rt(mn_core::transcription::Timbre::Lead);
+        assert!(block(&mut l, 512).iter().all(|&s| s == 0.0), "en silencio hasta pulsar");
+        press(&mut l, 69, 0);
+        let out = block(&mut l, 4800);
+        assert!(!l.rt.playing);
+        let hz = crossings_hz(&out[960..]);
+        assert!((hz - 440.0).abs() < 15.0, "La4 en vivo: {hz} Hz");
+        release(&mut l, 69, 0);
+        let tail = block(&mut l, 9600);
+        assert!(tail[tail.len() - 1000..].iter().all(|&s| s == 0.0), "tras la liberación, silencio");
+
+        // Silenciar la pista armada también silencia lo que se toca.
+        l.cmd.push(Command::SetMute(1, true)).ok().unwrap();
+        press(&mut l, 72, 0);
+        assert!(block(&mut l, 2048).iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn live_notes_are_recorded_where_they_were_heard() {
+        let mut l = live_rt(mn_core::transcription::Timbre::Keys);
+        l.cmd.push(Command::SetMidiRecord(true)).ok().unwrap();
+        l.cmd.push(Command::Play).ok().unwrap();
+        // Ancla de reproducción: el primer frame suena en t0 (como lo diría WASAPI).
+        let t0 = 1_000_000_000u64;
+        let ns = |frames: u64| t0 + frames * 1_000_000_000 / RATE as u64;
+        let mut out = vec![0.0f32; 5120 * 2];
+        l.rt.render_at(&mut out, 2, Some(t0));
+        // Se pulsa cuando sonaba el frame 4800 (la canción va por 5120 al procesar).
+        press(&mut l, 60, ns(4800));
+        let mut out = vec![0.0f32; 512 * 2];
+        l.rt.render_at(&mut out, 2, Some(ns(5120)));
+        assert!(out.iter().any(|&s| s.abs() > 0.01), "suena mientras se reproduce");
+        // Pedal: la liberación espera a que se suelte el pedal.
+        l.midi.push(MidiEvent { msg: MidiMessage::Sustain(true), time_ns: 0 }).unwrap();
+        release(&mut l, 60, ns(5300));
+        l.rt.render_at(&mut out, 2, Some(ns(5632)));
+        assert!(l.rec.pop().is_ok_and(|e| e == RecEvent { frame: 4800, key: 60, velocity: 100, on: true }));
+        assert!(l.rec.pop().is_err(), "sostenida: aún no termina");
+        l.midi.push(MidiEvent { msg: MidiMessage::Sustain(false), time_ns: ns(5700) }).unwrap();
+        l.rt.render_at(&mut out, 2, Some(ns(6144)));
+        let off = l.rec.pop().unwrap();
+        assert_eq!((off.key, off.on, off.frame), (60, false, 5700), "termina al soltar el pedal");
+
+        // Sin grabar o con el transporte parado no se anota nada.
+        l.cmd.push(Command::SetMidiRecord(false)).ok().unwrap();
+        press(&mut l, 62, 0);
+        block(&mut l, 512);
+        assert!(l.rec.pop().is_err());
+        let notes = pair_notes(&[RecEvent { frame: 4800, key: 60, velocity: 100, on: true }, off], RATE, 10_000);
+        assert_eq!(notes, vec![(0.1, 5700.0 / RATE as f64, 60, 100)]);
+    }
+
+    #[test]
+    fn live_sound_goes_through_the_track_fader() {
+        let mut l = live_rt(mn_core::transcription::Timbre::Lead);
+        press(&mut l, 69, 0);
+        let full = block(&mut l, 4800).iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        l.cmd.push(Command::SetGain(1, 0.25)).ok().unwrap();
+        let quiet = block(&mut l, 4800).iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!((quiet / full - 0.25).abs() < 0.03, "{full} → {quiet}");
+        // Reproduciendo (mezcla en la pista, antes de efectos) suena igual de fuerte.
+        l.cmd.push(Command::Play).ok().unwrap();
+        let playing = block(&mut l, 4800).iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!((playing - quiet).abs() < 0.03, "{quiet} vs {playing}");
+        // Desarmar suelta el instrumento (fuera del hilo de audio).
+        l.cmd.push(Command::SetLive(None)).ok().unwrap();
+        let silent = block(&mut l, 512);
+        assert!(silent.iter().all(|&s| s == 0.0));
     }
 }

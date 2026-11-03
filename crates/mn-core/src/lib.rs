@@ -7,6 +7,7 @@ pub mod audio;
 pub mod denoise;
 pub mod export;
 pub mod ffmpeg;
+pub mod livesynth;
 pub mod lyrics;
 pub mod master;
 pub mod mix;

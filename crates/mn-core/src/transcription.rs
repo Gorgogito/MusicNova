@@ -883,14 +883,8 @@ pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre
     let end = length.unwrap_or_else(|| notes.iter().map(|n| n.end).fold(0.0, f64::max) + rel);
     let frames = (end.max(0.0) * rate as f64).ceil() as usize;
     let mut mono = vec![0.0f32; frames];
-    let harmonics: &[f32] = match timbre {
-        Timbre::Keys => &[1.0, 0.45, 0.25, 0.12, 0.06],
-        Timbre::Bass => &[1.0, 0.35, 0.08],
-        Timbre::Lead => &[1.0, 0.5, 0.33, 0.25, 0.2, 0.16],
-        Timbre::Drums => &[],
-        Timbre::Pad => &[1.0, 0.3, 0.2, 0.08, 0.05],
-        Timbre::Pluck => &[1.0, 0.6, 0.4, 0.3, 0.2, 0.12, 0.08],
-    };
+    // Las mismas tablas que el sintetizador en vivo (`livesynth`).
+    let harmonics = crate::livesynth::harmonics(timbre);
     let sr = rate as f32;
     if timbre == Timbre::Drums {
         let mut noise = Noise(0x9e37_79b9);
@@ -915,14 +909,7 @@ pub fn synthesize(notes: &[Note], rate: u32, length: Option<f64>, timbre: Timbre
             }
             let t = k as f32 / sr;
             let mut env = if k < attack { k as f32 / attack as f32 } else { 1.0 };
-            env *= match timbre {
-                Timbre::Keys => (-t * 2.2).exp(),
-                Timbre::Bass => (-t * 1.2).exp(),
-                Timbre::Lead => 0.85 + 0.15 * (-t * 6.0).exp(),
-                Timbre::Drums => 0.0,
-                Timbre::Pad => 1.0,
-                Timbre::Pluck => (-t * 7.0).exp(),
-            };
+            env *= crate::livesynth::decay(timbre, t);
             if k >= hold {
                 env *= 1.0 - (k - hold) as f32 / (total - hold).max(1) as f32;
             }

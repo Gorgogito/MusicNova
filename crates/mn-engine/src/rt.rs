@@ -9,12 +9,16 @@ use std::sync::Arc;
 
 use cpal::{FromSample, SizedSample};
 use mn_fx::loudness::LoudnessMeter;
-use mn_fx::Chain;
+use mn_fx::{Chain, Instrument, LiveNote};
 use mn_stretch::Stretch;
 
 use crate::click::Clicks;
 use crate::input::Monitor;
-use crate::{BeatGrid, Command, EngineTrack, Garbage, Shared};
+use crate::live::{MidiEvent, MidiMessage, RecEvent};
+use crate::{BeatGrid, Command, EngineTrack, Garbage, Shared, TrackId};
+
+/// Notas del instrumento en vivo por bloque como máximo.
+const MAX_LIVE_NOTES: usize = 256;
 
 /// Frames de salida que se procesan de una vez.
 pub const BLOCK: usize = 512;
@@ -109,6 +113,23 @@ pub struct RtState {
     /// Desfase filtrado (ns) entre el reloj de salida y el instante en que suena.
     play_offset_ns: Option<i128>,
     sample_rate: u32,
+
+    // Instrumento en vivo.
+    midi_rx: rtrb::Consumer<MidiEvent>,
+    rec_tx: rtrb::Producer<RecEvent>,
+    record_midi: bool,
+    live: Option<Box<dyn Instrument>>,
+    live_track: TrackId,
+    live_buf: Vec<f32>,
+    live_notes: Vec<LiveNote>,
+    sustain: bool,
+    sustained: [bool; 128],
+    /// Este bloque el sonido en vivo entra en su pista antes de los efectos.
+    live_inject: bool,
+    /// La pista ya recibió el sonido en vivo en este bloque.
+    live_mixed: bool,
+    /// (reloj de salida, instante en que suena en ns) del último callback.
+    anchor: Option<(u64, u64)>,
 }
 
 impl RtState {
@@ -161,7 +182,120 @@ impl RtState {
             monitor: None,
             play_offset_ns: None,
             sample_rate,
+            midi_rx: rtrb::RingBuffer::new(1).1,
+            rec_tx: rtrb::RingBuffer::new(1).0,
+            record_midi: false,
+            live: None,
+            live_track: 0,
+            live_buf: vec![0.0; BLOCK * 2],
+            live_notes: Vec::with_capacity(MAX_LIVE_NOTES),
+            sustain: false,
+            sustained: [false; 128],
+            live_inject: false,
+            live_mixed: false,
+            anchor: None,
         }
+    }
+
+    /// Conecta la cola de eventos MIDI y la de notas grabadas.
+    pub(crate) fn attach_midi(&mut self, midi: rtrb::Consumer<MidiEvent>, rec: rtrb::Producer<RecEvent>) {
+        self.midi_rx = midi;
+        self.rec_tx = rec;
+    }
+
+    /// Posición de la canción que se oía en el instante `time_ns` (0 = ahora):
+    /// la del bloque actual menos lo que tarda en sonar (dispositivo, efectos
+    /// con latencia y estirador).
+    fn heard_frame(&self, time_ns: u64) -> u64 {
+        let mut lag = self.output_latency() as f64;
+        if self.stretching {
+            lag += self.stretch_delay_out() as f64;
+        }
+        if let (true, Some((clock, ns))) = (time_ns > 0, self.anchor) {
+            let rate = self.sample_rate as f64;
+            let plays_at = ns as f64 + (self.output_clock as f64 - clock as f64) * 1e9 / rate;
+            lag += ((plays_at - time_ns as f64) * rate / 1e9).max(0.0);
+        }
+        let tempo = if self.stretching { self.tempo } else { 1.0 };
+        (self.position as f64 - lag * tempo).max(0.0) as u64
+    }
+
+    fn live_note(&mut self, key: u8, velocity: u8, on: bool, time_ns: u64) {
+        let key = key.min(127);
+        if self.live_notes.len() < self.live_notes.capacity() {
+            self.live_notes.push(LiveNote { time: 0, key, velocity: if on { velocity.max(1) } else { 0 }, on });
+        }
+        if self.record_midi && self.playing {
+            let frame = self.heard_frame(time_ns);
+            let _ = self.rec_tx.push(RecEvent { frame, key, velocity, on });
+        }
+    }
+
+    /// Lee los eventos MIDI pendientes: pedal de sostenido y grabación incluidos.
+    fn collect_midi(&mut self) {
+        self.live_notes.clear();
+        while let Ok(ev) = self.midi_rx.pop() {
+            match ev.msg {
+                MidiMessage::NoteOn { key, velocity } => {
+                    let k = key.min(127) as usize;
+                    if self.sustained[k] {
+                        // Se vuelve a pulsar una nota sostenida: la anterior termina aquí.
+                        self.sustained[k] = false;
+                        self.live_note(key, 0, false, ev.time_ns);
+                    }
+                    self.live_note(key, velocity, true, ev.time_ns);
+                }
+                MidiMessage::NoteOff { key } => {
+                    if self.sustain {
+                        self.sustained[key.min(127) as usize] = true;
+                    } else {
+                        self.live_note(key, 0, false, ev.time_ns);
+                    }
+                }
+                MidiMessage::Sustain(down) => {
+                    self.sustain = down;
+                    if !down {
+                        for k in 0..128u8 {
+                            if std::mem::take(&mut self.sustained[k as usize]) {
+                                self.live_note(k, 0, false, ev.time_ns);
+                            }
+                        }
+                    }
+                }
+                MidiMessage::AllNotesOff => {
+                    self.sustain = false;
+                    for k in 0..128 {
+                        if std::mem::take(&mut self.sustained[k]) {
+                            self.live_note(k as u8, 0, false, ev.time_ns);
+                        }
+                    }
+                    if let Some(l) = self.live.as_deref_mut() {
+                        l.all_notes_off();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sonido en vivo que no entró en su pista durante la mezcla (transporte
+    /// parado o tempo cambiado): va por su volumen y panorama y, parado, también
+    /// por sus efectos.
+    fn mix_live_fallback(&mut self, n: usize, playing: bool) {
+        if self.live.is_none() || self.live_mixed {
+            return;
+        }
+        let any_solo = self.tracks.iter().any(|t| t.solo);
+        let Some(t) = self.tracks.iter_mut().find(|t| t.id == self.live_track) else { return };
+        if t.mute || (any_solo && !t.solo) {
+            return;
+        }
+        let buf = &mut self.live_buf[..n * 2];
+        if !playing {
+            if let Some(chain) = t.chain.as_deref_mut() {
+                chain.process_with_key(buf, None);
+            }
+        }
+        mn_core::mix::mix_ramp(&mut self.scratch_out[..n * 2], buf, (t.gain_l, t.gain_r), (t.gain_l, t.gain_r));
     }
 
     fn length(&self) -> u64 {
@@ -323,11 +457,36 @@ impl RtState {
                     t.sidechain = source.filter(|s| *s != id);
                 }
             }
+            Command::SetLive(live) => {
+                if let Some(mut old) = self.live.take() {
+                    old.all_notes_off();
+                    self.discard(Garbage::Instrument(old));
+                }
+                self.sustain = false;
+                self.sustained = [false; 128];
+                if let Some((id, inst)) = live {
+                    self.live_track = id;
+                    self.live = Some(inst);
+                }
+            }
+            Command::SetMidiRecord(on) => self.record_midi = on,
             Command::SetChain(target, chain) => {
+                // Cadena nueva (quizá con plugins recién cargados): la automatización
+                // vuelve a enviarles sus valores.
                 let old = match target {
-                    None => self.master_chain.replace(chain),
+                    None => {
+                        if let Some(a) = self.master_automation.as_deref() {
+                            a.invalidate();
+                        }
+                        self.master_chain.replace(chain)
+                    }
                     Some(id) => match find(&mut self.tracks, id) {
-                        Some(t) => t.chain.replace(chain),
+                        Some(t) => {
+                            if let Some(a) = t.automation.as_deref() {
+                                a.invalidate();
+                            }
+                            t.chain.replace(chain)
+                        }
                         None => Some(chain),
                     },
                 };
@@ -474,7 +633,13 @@ impl RtState {
             self.tracks[i].key_valid = true;
         }
         self.pdc_tracks = max_lat;
+        // Instrumento en vivo: entra en su pista antes de los efectos (mismo tamaño de bloque).
+        let live = (self.live_inject && self.live.is_some() && frames * 2 <= self.live_buf.len())
+            .then(|| (self.live_track, &self.live_buf[..frames * 2]));
         for t in &mut self.tracks {
+            if live.is_some_and(|(id, _)| id == t.id) {
+                self.live_mixed = true;
+            }
             let comp = max_lat - t.latency();
             if t.mute || (any_solo && !t.solo) {
                 if comp > 0 {
@@ -484,6 +649,11 @@ impl RtState {
             }
             track_buf.fill(0.0);
             mn_core::mix::render_clips(&t.data, &t.clips, src, track_buf);
+            if let Some((_, l)) = live.filter(|(id, _)| *id == t.id) {
+                for (d, s) in track_buf.iter_mut().zip(l) {
+                    *d += *s;
+                }
+            }
             let auto = t.automation.as_deref().zip(span);
             if let Some(chain) = t.chain.as_deref_mut() {
                 if let Some((a, (p0, _))) = auto {
@@ -522,7 +692,9 @@ impl RtState {
         }
         let delay = self.stretch_delay_out();
         if !self.stretching {
+            self.live_inject = true;
             self.mix_source(n, false);
+            self.live_inject = false;
             for k in 0..self.block_beats_len {
                 let (f, accent) = self.block_beats[k];
                 if self.metronome_on {
@@ -593,14 +765,23 @@ impl RtState {
             self.apply(cmd);
         }
         let block_start = self.position;
+        // Instrumento en vivo: notas que llegaron y su sonido de este bloque.
+        self.collect_midi();
+        self.live_mixed = false;
+        if let Some(l) = self.live.as_deref_mut() {
+            l.render(&self.live_notes, &mut self.live_buf[..n * 2]);
+        }
         // El transporte puede pararse a mitad de bloque (final de la canción): el
         // máster procesa igualmente el bloque entero para no cortar su último tramo.
         let playing = self.playing;
         self.render_music(n);
+        self.mix_live_fallback(n, playing);
+        // Con un instrumento armado el máster sigue procesando aunque esté parado.
+        let master_on = playing || self.live.is_some();
         // Bus máster: efectos, ganancia y medición (el metrónomo va después y no se mide).
         let auto = self.master_automation.as_deref().filter(|_| playing);
         if let Some(chain) = self.master_chain.as_deref_mut() {
-            if playing {
+            if master_on {
                 if let Some(a) = auto {
                     a.apply_effects(chain, block_start);
                 }
@@ -659,6 +840,7 @@ impl RtState {
         if let Some(t) = playback_nanos {
             let at = self.anchor_playback(t, out.len() / channels.max(1));
             self.shared.out_anchor.store(self.output_clock, at);
+            self.anchor = Some((self.output_clock, at));
         }
         let frames = out.len() / channels;
         let silence = T::from_sample(0.0f32);

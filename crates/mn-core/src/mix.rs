@@ -158,6 +158,10 @@ pub fn mixdown(
         let (fader, pan) = (db_to_gain(t.gain_db), t.pan);
         let (gl, gr) = balance_gains(fader, t.pan);
         let mut chain = (!t.effects.is_empty()).then(|| Chain::new_offline(t.effects, sample_rate));
+        // Instancias nuevas: la automatización les envía todos sus valores.
+        if let Some(a) = t.automation {
+            a.invalidate();
+        }
         // Compensación de latencia: la cadena se procesa `lat` frames más allá
         // del final y su salida se adelanta `lat` frames, así todas las pistas
         // quedan alineadas sin retrasar ninguna.
@@ -208,6 +212,9 @@ pub fn mixdown(
         }
     }
     let mut chain = (!master.effects.is_empty()).then(|| Chain::new_offline(&master.effects, sample_rate));
+    if let Some(a) = master_automation {
+        a.invalidate();
+    }
     let g = db_to_gain(master.gain_db);
     if let Some(c) = chain.as_mut() {
         // Igual que en las pistas: se procesa la latencia del máster de más y se adelanta.

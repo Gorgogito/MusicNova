@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { api, errorMessage, type InstrumentSource, type PluginDescriptor, type ProjectView, type SynthTimbre, type TrackView } from '../lib/api'
 import { FORMAT_LABEL, usePlugins } from '../lib/plugins'
+import { noteName, type LivePlay } from '../lib/live'
 import { Icon } from './Icon'
 
 interface Props {
+  live: LivePlay
   project: ProjectView
   shownNotes: Set<string>
   onToggleNotes: (trackId: string) => void
@@ -66,6 +68,8 @@ export function InstrumentsPanel(props: Props) {
   const [newKey, setNewKey] = useState('synth:keys')
   const [busy, setBusy] = useState<string | null>(null)
   const tracks = project.tracks.filter((t) => t.kind === 'instrument')
+  const { live } = props
+  const armed = live.status?.armed ?? null
 
   const run = async <T,>(label: string, f: () => Promise<T>): Promise<T | undefined> => {
     setBusy(label)
@@ -139,6 +143,23 @@ export function InstrumentsPanel(props: Props) {
                   <strong className="ellipsis">{t.name}</strong>
                   <span className="small muted">{count} notas</span>
                   <div className="tx-actions">
+                    <button
+                      className={`btn small ${armed === t.id ? 'primary' : 'ghost'}`}
+                      title="Armar la pista: el teclado MIDI (o el del ordenador) toca su instrumento"
+                      disabled={busy !== null}
+                      onClick={() => run('Preparando el instrumento…', () => live.arm(armed === t.id ? null : t.id))}
+                    >
+                      <Icon name="piano" size={14} /> {armed === t.id ? 'Tocando' : 'Tocar'}
+                    </button>
+                    {armed === t.id && t.instrument?.type === 'plugin' && (
+                      <button
+                        className="btn ghost small"
+                        title="Interfaz del plugin; al cerrarla se guarda su sonido y se regenera la pista"
+                        onClick={() => api.pluginOpenEditor(`inst:${t.id}`).catch((e) => props.onError(errorMessage(e)))}
+                      >
+                        <Icon name="sliders" size={14} /> Interfaz
+                      </button>
+                    )}
                     <SourceSelect value={keyOf(t.instrument)} onChange={(k) => change(t, k)} instruments={instruments} />
                     <button
                       className={`btn ghost small ${props.shownNotes.has(t.id) ? 'active' : ''}`}
@@ -153,6 +174,75 @@ export function InstrumentsPanel(props: Props) {
           </div>
         </section>
       )}
+      <LiveSection live={live} hasTracks={tracks.length > 0} armedName={tracks.find((t) => t.id === armed)?.name ?? null} />
     </div>
+  )
+}
+
+/** Teclado MIDI, teclado del ordenador y grabación de lo tocado. */
+function LiveSection({ live, hasTracks, armedName }: { live: LivePlay; hasTracks: boolean; armedName: string | null }) {
+  const devices = live.status?.devices ?? []
+  const open = live.status?.open ?? null
+  return (
+    <section className="tx-section">
+      <h3>
+        <Icon name="piano" size={16} /> Tocar en vivo
+      </h3>
+      <p className="small muted">
+        {armedName
+          ? `Lo que toques suena con «${armedName}», por sus efectos y su volumen, también con la canción parada.`
+          : hasTracks
+            ? 'Pulsa «Tocar» en una pista de instrumento para tocarla con un teclado MIDI o con el del ordenador.'
+            : 'Crea una pista de instrumento para tocarla en vivo.'}
+      </p>
+      <div className="panel-row">
+        <label className="field">
+          <span className="small muted">Teclado MIDI</span>
+          <select value={open ? String(devices.indexOf(open)) : ''} onChange={(e) => live.openDevice(e.target.value === '' ? null : Number(e.target.value))}>
+            <option value="">{devices.length ? 'Ninguno' : 'No hay teclados MIDI conectados'}</option>
+            {devices.map((d, i) => (
+              <option key={`${i}:${d}`} value={i}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="icon-btn" title="Buscar teclados MIDI conectados" onClick={live.refresh}>
+          <Icon name="refresh" size={14} />
+        </button>
+        <label className="check small" title="Las teclas A W S E D F T G Y H U J K O L P Ñ tocan una octava y media; Z y X cambian de octava">
+          <input type="checkbox" checked={live.keyboard} onChange={(e) => live.setKeyboard(e.target.checked)} />
+          Teclado del ordenador
+        </label>
+        {live.keyboard && (
+          <>
+            <span className="small mono" title="Z: octava abajo · X: octava arriba">
+              Octava {live.octave} (A = {noteName(12 * (live.octave + 1))})
+            </span>
+            <label className="field small">
+              <span className="small muted">Fuerza</span>
+              <input type="range" min={1} max={127} value={live.velocity} onChange={(e) => live.setVelocity(Number(e.target.value))} />
+            </label>
+          </>
+        )}
+      </div>
+      <div className="panel-row">
+        <button
+          className={`btn record-btn ${live.recording ? 'on' : ''}`}
+          disabled={!armedName}
+          title="Con la grabación activa, al reproducir se anota lo que tocas; al parar, se añade a la pista (Ctrl+Z lo deshace)"
+          onClick={() => live.setRecording(!live.recording)}
+        >
+          <Icon name="record" size={16} /> {live.recording ? 'Grabando notas' : 'Grabar notas'}
+        </button>
+        <button className="btn ghost small" title="Suelta todas las notas (por si alguna se queda sonando)" onClick={live.panic}>
+          Soltar todo
+        </button>
+        {live.held.length > 0 && <span className="small mono">{live.held.map(noteName).join(' ')}</span>}
+      </div>
+      {live.recording && (
+        <span className="small muted">Pulsa reproducir y toca. Cada vez que pares, lo tocado se añade a la pista en el sitio donde sonaba.</span>
+      )}
+    </section>
   )
 }

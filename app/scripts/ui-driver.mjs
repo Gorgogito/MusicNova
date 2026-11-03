@@ -12,6 +12,7 @@
 //   clickxy <x> <y>                    clic en coordenadas de la página
 //   type <texto>                       escribe en el elemento con el foco
 //   key <Tecla> [modificadores]        pulsa una tecla (p. ej. «key s», «key Delete», «key z ctrl»)
+//   keydown <Tecla> / keyup <Tecla>    mantiene pulsada / suelta una tecla
 //   select <objetivo> <valor>          elige una opción de un <select> (como haría el usuario)
 //   wait <objetivo> [segundos]         espera a que aparezca
 //   text [objetivo]                    texto visible (de la página o de un elemento)
@@ -155,6 +156,17 @@ async function main() {
         await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: key === 'Space' ? ' ' : key, code, windowsVirtualKeyCode: vk, modifiers, text })
         await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: key === 'Space' ? ' ' : key, code, windowsVirtualKeyCode: vk, modifiers })
         console.log('tecla', args.join('+'))
+        break
+      }
+      case 'keydown':
+      case 'keyup': {
+        // Mantener una tecla pulsada (teclado del ordenador como piano): «keydown a» … «keyup a».
+        const key = args[0]
+        const code = key.length === 1 ? `Key${key.toUpperCase()}` : key
+        const vk = key.length === 1 ? key.toUpperCase().charCodeAt(0) : undefined
+        const type = cmd === 'keydown' ? 'keyDown' : 'keyUp'
+        await cdp.send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: vk, text: type === 'keyDown' && key.length === 1 ? key : undefined })
+        console.log(cmd, key)
         break
       }
       case 'select': {

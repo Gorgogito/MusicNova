@@ -6,6 +6,8 @@
 //! efectos se actualizan al inicio de cada bloque y el volumen y el panorama
 //! se interpolan muestra a muestra dentro del bloque, sin escalones audibles.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use mn_fx::{Chain, EffectParams, EffectSlot};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,7 +19,7 @@ pub const MAX_POINTS: usize = 10_000;
 /// Carriles por pista como máximo.
 pub const MAX_LANES: usize = 64;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AutomationTarget {
     /// Volumen en dB (sustituye al fader mientras el carril tiene puntos).
@@ -26,6 +28,10 @@ pub enum AutomationTarget {
     Pan,
     /// Parámetro `param` (ruta, p. ej. "mid1.gain_db") del efecto con id `slot`.
     Effect { slot: String, param: String },
+    /// Parámetro `param` (id) del plugin externo del efecto `slot`, en el
+    /// dominio de valores del plugin. Nombre y rango se guardan para dibujar
+    /// la curva aunque el plugin no esté cargado.
+    Plugin { slot: String, param: u32, name: String, min: f32, max: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -50,6 +56,14 @@ pub struct AutomationLane {
 }
 
 impl AutomationTarget {
+    /// Mismo destino (para un plugin cuentan el efecto y el id del parámetro).
+    pub fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Plugin { slot: a, param: p, .. }, Self::Plugin { slot: b, param: q, .. }) => a == b && p == q,
+            _ => self == other,
+        }
+    }
+
     /// Limita `v` al rango del destino; `None` si el destino ya no existe.
     pub fn clamp(&self, effects: &[EffectSlot], v: f32) -> Option<f32> {
         match self {
@@ -59,6 +73,11 @@ impl AutomationTarget {
                 let s = effects.iter().find(|s| &s.id == slot)?;
                 s.params.param(param)?;
                 s.params.with_param(param, v).param(param)
+            }
+            Self::Plugin { slot, min, max, .. } => {
+                effects.iter().find(|s| &s.id == slot && s.plugin.is_some())?;
+                let (lo, hi) = if min <= max { (*min, *max) } else { (*max, *min) };
+                Some(if lo.is_finite() && hi.is_finite() { v.clamp(lo, hi) } else { v })
             }
         }
     }
@@ -70,7 +89,7 @@ impl AutomationTarget {
 pub fn sanitize_lanes(lanes: Vec<AutomationLane>, effects: &[EffectSlot]) -> Vec<AutomationLane> {
     let mut out: Vec<AutomationLane> = Vec::new();
     for mut lane in lanes {
-        if out.len() >= MAX_LANES || out.iter().any(|l| l.target == lane.target || l.id == lane.id) {
+        if out.len() >= MAX_LANES || out.iter().any(|l| l.target.same(&lane.target) || l.id == lane.id) {
             continue;
         }
         if lane.target.clamp(effects, 0.0).is_none() {
@@ -132,17 +151,27 @@ struct EffectAutomation {
     params: Vec<(&'static str, Curve)>,
 }
 
+/// Curva de un parámetro de plugin y último valor enviado (para no repetir).
+struct PluginAutomation {
+    index: usize,
+    id: u32,
+    curve: Curve,
+    /// Bits del último valor enviado (NaN: ninguno todavía).
+    last: AtomicU32,
+}
+
 /// Automatización de un canal (pista o máster) a una frecuencia concreta.
 pub struct ChannelAutomation {
     volume: Option<Curve>,
     pan: Option<Curve>,
     effects: Vec<EffectAutomation>,
+    plugins: Vec<PluginAutomation>,
 }
 
 impl ChannelAutomation {
     /// `None` si ningún carril activo tiene puntos.
     pub fn build(lanes: &[AutomationLane], effects: &[EffectSlot], rate: u32) -> Option<Self> {
-        let mut a = Self { volume: None, pan: None, effects: Vec::new() };
+        let mut a = Self { volume: None, pan: None, effects: Vec::new(), plugins: Vec::new() };
         for lane in lanes.iter().filter(|l| l.enabled) {
             let Some(curve) = Curve::new(&lane.points, rate) else { continue };
             match &lane.target {
@@ -157,9 +186,13 @@ impl ChannelAutomation {
                         None => a.effects.push(EffectAutomation { index, base, params: vec![(path, curve)] }),
                     }
                 }
+                AutomationTarget::Plugin { slot, param, .. } => {
+                    let Some(index) = effects.iter().position(|s| &s.id == slot && s.plugin.is_some()) else { continue };
+                    a.plugins.push(PluginAutomation { index, id: *param, curve, last: AtomicU32::new(f32::NAN.to_bits()) });
+                }
             }
         }
-        (a.volume.is_some() || a.pan.is_some() || !a.effects.is_empty()).then_some(a)
+        (a.volume.is_some() || a.pan.is_some() || !a.effects.is_empty() || !a.plugins.is_empty()).then_some(a)
     }
 
     pub fn has_gain(&self) -> bool {
@@ -178,6 +211,13 @@ impl ChannelAutomation {
         self.volume.as_ref().map_or(fader_gain, |c| db_to_gain(c.value_at(frame)))
     }
 
+    /// Olvida lo enviado a los plugins: el siguiente bloque les reenvía sus valores.
+    pub fn invalidate(&self) {
+        for p in &self.plugins {
+            p.last.store(f32::NAN.to_bits(), Ordering::Relaxed);
+        }
+    }
+
     /// Fija los parámetros automatizados de la cadena para `frame`. No reserva memoria.
     pub fn apply_effects(&self, chain: &mut Chain, frame: u64) {
         for e in &self.effects {
@@ -188,6 +228,14 @@ impl ChannelAutomation {
                 }
             }
             chain.set_params(e.index, &p);
+        }
+        // Plugins: solo se envía cuando la curva cambia el valor.
+        for p in &self.plugins {
+            let v = p.curve.value_at(frame);
+            if f32::from_bits(p.last.load(Ordering::Relaxed)) != v {
+                p.last.store(v.to_bits(), Ordering::Relaxed);
+                chain.set_plugin_param(p.index, p.id, v as f64);
+            }
         }
     }
 }

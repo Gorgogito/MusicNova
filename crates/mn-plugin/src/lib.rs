@@ -45,7 +45,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, ThreadId};
 
 use base64::Engine as _;
-use mn_fx::{EffectParams, EffectSlot, PluginRef, Processor};
+use mn_fx::{EffectParams, EffectSlot, Instrument, LiveNote, PluginRef, Processor};
 use serde::{Deserialize, Serialize};
 
 pub use scan::{default_folders, find_candidates, scan_file};
@@ -441,6 +441,11 @@ pub struct PluginProcessor {
     outl: Vec<f32>,
     outr: Vec<f32>,
     events: Vec<(u32, f64)>,
+    /// Cambios de la automatización para el siguiente bloque.
+    auto: Vec<(u32, f64)>,
+    /// Instrumento en vivo: notas del bloque y teclas pulsadas.
+    notes: Vec<NoteEvent>,
+    held: [bool; 128],
 }
 
 impl PluginProcessor {
@@ -454,6 +459,9 @@ impl PluginProcessor {
             outl: vec![0.0; MAX_BLOCK],
             outr: vec![0.0; MAX_BLOCK],
             events: Vec::with_capacity(1024),
+            auto: Vec::with_capacity(1024),
+            notes: Vec::with_capacity(1024),
+            held: [false; 128],
         }
     }
 }
@@ -462,6 +470,9 @@ impl Processor for PluginProcessor {
     fn process(&mut self, buf: &mut [f32]) {
         IN_AUDIO.with(|f| f.set(true));
         self.events.clear();
+        // Primero la automatización; los cambios del usuario, después, mandan.
+        let room = self.events.capacity();
+        self.events.extend(self.auto.drain(..).take(room));
         if let Ok(mut rx) = self.inst.queue_rx.try_lock() {
             while self.events.len() < self.events.capacity() {
                 match rx.pop() {
@@ -477,12 +488,13 @@ impl Processor for PluginProcessor {
                 self.inr[i] = f[1];
             }
             let events: &[(u32, f64)] = if k == 0 { &self.events } else { &[] };
+            let notes: &[NoteEvent] = if k == 0 { &self.notes } else { &[] };
             unsafe {
                 self.backend.process(
                     [&self.inl[..n], &self.inr[..n]],
                     [&mut self.outl[..n], &mut self.outr[..n]],
                     events,
-                    &[],
+                    notes,
                 );
             }
             for (i, f) in chunk.as_chunks_mut::<2>().0.iter_mut().enumerate() {
@@ -490,6 +502,7 @@ impl Processor for PluginProcessor {
                 f[1] = self.outr[i];
             }
         }
+        self.notes.clear();
         IN_AUDIO.with(|f| f.set(false));
     }
 
@@ -503,8 +516,69 @@ impl Processor for PluginProcessor {
         matches!(params, EffectParams::Plugin)
     }
 
+    fn set_plugin_param(&mut self, id: u32, value: f64) {
+        if let Some(e) = self.auto.iter_mut().find(|e| e.0 == id) {
+            e.1 = value;
+        } else if self.auto.len() < self.auto.capacity() {
+            self.auto.push((id, value));
+        }
+    }
+
     fn latency(&self) -> usize {
         self.inst.latency as usize
+    }
+}
+
+/// Plugin instrumento tocado en vivo: las notas del bloque van al plugin y su
+/// salida (sin entrada de audio) es el sonido del instrumento.
+impl Instrument for PluginProcessor {
+    fn render(&mut self, notes: &[LiveNote], buf: &mut [f32]) {
+        // `notes` puede traer ya las liberaciones de `all_notes_off`; `process` lo vacía.
+        let last = (buf.len() / 2).saturating_sub(1) as u32;
+        for n in notes.iter().take(self.notes.capacity()) {
+            let key = n.key.min(127);
+            let on = n.on && n.velocity > 0;
+            self.held[key as usize] = on;
+            self.notes.push(NoteEvent { time: n.time.min(last), key, velocity: n.velocity as f32 / 127.0, on });
+        }
+        buf.fill(0.0);
+        self.process(buf);
+    }
+
+    fn all_notes_off(&mut self) {
+        for key in 0..128u8 {
+            if std::mem::take(&mut self.held[key as usize]) && self.notes.len() < self.notes.capacity() {
+                self.notes.push(NoteEvent { time: 0, key, velocity: 0.0, on: false });
+            }
+        }
+    }
+}
+
+/// Prefijo de los ids de las instancias de instrumentos en vivo (`inst:<pista>`):
+/// así se abre su interfaz como la de un efecto y no las suelta `retain_instances`.
+pub const INSTRUMENT_PREFIX: &str = "inst:";
+
+/// Instancia en tiempo real de un plugin instrumento para tocarlo en vivo,
+/// registrada con el id `key` (reutiliza la que ya hubiera con el mismo plugin).
+pub fn live_instrument(plugin: &PluginRef, sample_rate: u32, key: &str) -> Result<Box<dyn Instrument>, String> {
+    if let Some(inst) = instance(key) {
+        if inst.same_plugin(plugin) && inst.sample_rate == sample_rate && inst.failure().is_none() {
+            return Ok(Box::new(PluginProcessor::new(inst)));
+        }
+    }
+    let mut inst = Instance::load_with(plugin, sample_rate, true)?;
+    inst.backend().attach_slot(key);
+    Arc::get_mut(&mut inst).expect("instancia recién creada").slot_id = Some(key.to_string());
+    if let Some(old) = live().lock().unwrap().insert(key.to_string(), inst.clone()) {
+        old.close_editor();
+    }
+    Ok(Box::new(PluginProcessor::new(inst)))
+}
+
+/// Suelta la instancia de un instrumento en vivo (al desarmar o cambiar de instrumento).
+pub fn release_instrument(key: &str) {
+    if let Some(i) = live().lock().unwrap().remove(key) {
+        i.close_editor();
     }
 }
 
@@ -587,7 +661,7 @@ pub fn load_error(slot_id: &str) -> Option<String> {
 pub fn retain_instances(keep: impl Fn(&str) -> bool) {
     let removed: Vec<Arc<Instance>> = {
         let mut map = live().lock().unwrap();
-        let gone: Vec<String> = map.keys().filter(|k| !keep(k)).cloned().collect();
+        let gone: Vec<String> = map.keys().filter(|k| !k.starts_with(INSTRUMENT_PREFIX) && !keep(k)).cloned().collect();
         gone.iter().filter_map(|k| map.remove(k)).collect()
     };
     for i in removed {

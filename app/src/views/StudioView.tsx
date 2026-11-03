@@ -11,6 +11,7 @@ import {
   type Lyrics,
   type MasterSettings,
   type Note,
+  type PluginParam,
   type PracticeSettings,
   type ProjectView,
   type SeparationResult,
@@ -23,6 +24,7 @@ import { NotesLane } from '../components/NotesLane'
 import { TranscriptionPanel } from '../components/TranscriptionPanel'
 import { GenerationPanel } from '../components/GenerationPanel'
 import { InstrumentsPanel } from '../components/InstrumentsPanel'
+import { useLivePlay } from '../lib/live'
 import type { GenerationJobs } from '../lib/useGeneration'
 import type { TranscriptionJobs } from '../lib/useTranscription'
 import { RecordPanel } from '../components/RecordPanel'
@@ -162,6 +164,22 @@ export function StudioView({
 
   const hasVocalsStem = project.tracks.some((t) => t.file.startsWith('audio/stems/') && /\/vocals\.\w+$/.test(t.file))
   const [mixChannel, setMixChannel] = useState<string | null>(null)
+  /** Parámetros de los plugins del proyecto (por id de efecto), para automatizarlos. */
+  const [pluginParams, setPluginParams] = useState<Record<string, PluginParam[]>>({})
+  const pluginSlotIds = [...project.tracks.flatMap((t) => t.effects), ...project.project.master.effects]
+    .filter((e) => e.params.type === 'plugin')
+    .map((e) => e.id)
+    .join(',')
+  useEffect(() => {
+    let alive = true
+    const ids = pluginSlotIds ? pluginSlotIds.split(',') : []
+    Promise.all(ids.map((id) => api.pluginParams(id).then((p) => [id, p] as const).catch(() => [id, [] as PluginParam[]] as const))).then(
+      (list) => alive && setPluginParams(Object.fromEntries(list)),
+    )
+    return () => {
+      alive = false
+    }
+  }, [pluginSlotIds])
   const master = project.project.master
   const setTrackEffects = (trackId: string, effects: EffectSlot[]) => {
     const t = project.tracks.find((x) => x.id === trackId)
@@ -382,6 +400,23 @@ export function StudioView({
     },
     [applyChange],
   )
+
+  /** Tocar en vivo: lo grabado se añade a las notas de la pista (con deshacer). */
+  const live = useLivePlay({
+    playing: transport.playing,
+    projectKey: project.dir,
+    onRecorded: (trackId, recorded) => {
+      const before = projectRef.current.notes?.tracks.find((n) => n.track_id === trackId)?.notes ?? []
+      const after = [...before, ...recorded].sort((a, b) => a.start - b.start || a.pitch - b.pitch)
+      commitEdit([{ kind: 'notes', trackId, before, after }])
+      if (!shownNotes.has(trackId)) toggleNotes(trackId)
+    },
+    onEditorClosed: (trackId) => {
+      if (projectRef.current.tracks.some((t) => t.id === trackId)) api.instrumentRender(trackId).then(replaceTrack).catch((e) => onError(errorMessage(e)))
+    },
+    onError,
+  })
+
   const undo = useCallback(() => {
     const e = undoStack.current.pop()
     if (!e) return
@@ -412,7 +447,7 @@ export function StudioView({
 
   /** Carriles de automatización de un canal (pista o máster). */
   const automationRows = (trackId: string | null, lanes: AutomationLane[], effects: EffectSlot[], color: string) => {
-    const targets = channelTargets(effects, trackId === null)
+    const targets = channelTargets(effects, trackId === null, pluginParams, lanes)
     const used = new Set(lanes.map((l) => targetKey(l.target)))
     return (
       <>
@@ -779,6 +814,7 @@ export function StudioView({
       )}
       {shownPanel === 'instruments' && (
         <InstrumentsPanel
+          live={live}
           project={project}
           shownNotes={shownNotes}
           onToggleNotes={toggleNotes}

@@ -1,5 +1,5 @@
 // Automatización: destinos posibles de cada canal, rangos y utilidades de curva.
-import type { AutomationLane, AutomationTarget, AutoPoint, EffectSlot } from './api'
+import type { AutomationLane, AutomationTarget, AutoPoint, EffectSlot, PluginParam } from './api'
 import { CONTROLS, EFFECT_LABELS, formatValue, type Control } from './effects'
 
 export interface TargetInfo {
@@ -14,7 +14,15 @@ export interface TargetInfo {
 }
 
 export const targetKey = (t: AutomationTarget): string =>
-  t.kind === 'effect' ? `fx:${t.slot}:${t.param}` : t.kind
+  t.kind === 'effect' ? `fx:${t.slot}:${t.param}` : t.kind === 'plugin' ? `pl:${t.slot}:${t.param}` : t.kind
+
+const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2))
+
+/** Destino de un parámetro de plugin (con su nombre y rango guardados en el carril). */
+function pluginTarget(slot: EffectSlot | undefined, t: Extract<AutomationTarget, { kind: 'plugin' }>): TargetInfo {
+  const plugin = slot?.plugin?.name ?? 'Plugin'
+  return { key: targetKey(t), target: t, label: `${plugin} · ${t.name}`, min: t.min, max: t.max, log: false, format: fmt }
+}
 
 const VOLUME: TargetInfo = {
   key: 'volume',
@@ -36,13 +44,31 @@ const PAN: TargetInfo = {
   format: (v) => (Math.abs(v) < 0.01 ? 'Centro' : `${v < 0 ? 'Izq.' : 'Der.'} ${Math.round(Math.abs(v) * 100)} %`),
 }
 
-/** Destinos automatizables de un canal: volumen, panorama (no en el máster) y parámetros de sus efectos. */
-export function channelTargets(effects: EffectSlot[], master: boolean): TargetInfo[] {
+/** Destinos automatizables de un canal: volumen, panorama (no en el máster) y
+ * parámetros de sus efectos. Los de plugins salen de `pluginParams` (por id de
+ * efecto) y de los carriles que ya existen, aunque el plugin no esté cargado. */
+export function channelTargets(
+  effects: EffectSlot[],
+  master: boolean,
+  pluginParams: Record<string, PluginParam[]> = {},
+  lanes: AutomationLane[] = [],
+): TargetInfo[] {
   const out = master ? [VOLUME] : [VOLUME, PAN]
   const seen: Record<string, number> = {}
   for (const slot of effects) {
-    // Los parámetros de plugins externos aún no se automatizan.
-    if (slot.params.type === 'plugin') continue
+    if (slot.params.type === 'plugin') {
+      const keys = new Set<string>()
+      for (const p of pluginParams[slot.id] ?? []) {
+        if (!(p.max > p.min)) continue
+        const info = pluginTarget(slot, { kind: 'plugin', slot: slot.id, param: p.id, name: p.name, min: p.min, max: p.max })
+        keys.add(info.key)
+        out.push(info)
+      }
+      for (const l of lanes) {
+        if (l.target.kind === 'plugin' && l.target.slot === slot.id && !keys.has(targetKey(l.target))) out.push(pluginTarget(slot, l.target))
+      }
+      continue
+    }
     const type = slot.params.type
     seen[type] = (seen[type] ?? 0) + 1
     const name = `${EFFECT_LABELS[type]}${effects.filter((e) => e.params.type === type).length > 1 ? ` ${seen[type]}` : ''}`
@@ -93,7 +119,9 @@ export function automated(lanes: AutomationLane[], kind: 'volume' | 'pan'): bool
 
 /** Quita los carriles de efectos que ya no existen. */
 export function pruneLanes(lanes: AutomationLane[], effects: EffectSlot[]): AutomationLane[] {
-  return lanes.filter((l) => l.target.kind !== 'effect' || effects.some((e) => e.id === (l.target as { slot: string }).slot))
+  return lanes.filter(
+    (l) => (l.target.kind !== 'effect' && l.target.kind !== 'plugin') || effects.some((e) => e.id === (l.target as { slot: string }).slot),
+  )
 }
 
 /** Carril nuevo con el primer destino libre; `null` si no queda ninguno. */

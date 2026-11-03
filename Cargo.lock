@@ -2289,6 +2289,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2306,10 +2307,12 @@ dependencies = [
  "base64 0.22.1",
  "clap-sys",
  "libloading 0.8.9",
+ "mn-core",
  "mn-fx",
  "rtrb",
  "serde",
  "serde_json",
+ "uuid",
  "vst3",
  "windows-sys 0.59.0",
 ]

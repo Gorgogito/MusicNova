@@ -71,9 +71,10 @@ El plugin de prueba (`mn-testplugin`) detecta ahora esos incumplimientos: `stop_
 
 - `request_restart` de CLAP y `restartComponent` de VST3 no reinician el plugin. Ninguno de los
   probados lo necesitó.
-- No hay automatización de parámetros de plugins.
-- Las pistas de instrumento generan su audio sin conexión (al editar notas o cambiar de
-  instrumento), no en tiempo real: tocar un teclado MIDI en vivo no está soportado.
+- La automatización llega al procesador del plugin como cambios de parámetro por bloque; en VST3
+  el controlador (y por tanto los parámetros genéricos de la app) no se actualiza mientras suena.
+- En vivo solo se leen notas, el pedal de sostenido y «soltar todo»: pitch bend, aftertouch y
+  otros controladores MIDI se ignoran.
 
 ## Cada plugin en su propio proceso
 
@@ -111,6 +112,38 @@ hilo principal a voluntad; pruebas en `crates/mn-plugin/tests/remote.rs`) y en l
 Surge XT Effects en el máster, matar su proceso durante la reproducción no detuvo el audio; llegó el
 aviso y «Reiniciar plugin» lanzó un anfitrión nuevo con la interfaz operativa. Surge XT (VST3)
 generó la pista de instrumento en un anfitrión temporal.
+
+## Automatización de parámetros
+
+Cualquier parámetro de un plugin del canal se puede automatizar con un carril, como los de los
+efectos integrados. El carril guarda el id del parámetro, su nombre y su rango, así que se dibuja
+aunque el plugin no esté cargado. El motor y la exportación evalúan la curva al principio de cada
+bloque y envían el valor al plugin solo cuando cambia; tras reconstruir la cadena (reiniciar un
+plugin caído, exportar con instancias nuevas) se reenvía. Funciona igual con el plugin en otro
+proceso. Probado con el plugin de prueba en vivo y en la mezcla offline (`plugin_parameters_follow_automation`
+y su variante en otro proceso), y en la app con «Output Mix» de Surge XT Effects en el máster: una
+rampa dibujada de 0,943 a 0,066 se leyó en el plugin durante la reproducción como 0,894 → 0,757 →
+0,619 → 0,480 → 0,341 → 0,204 → 0,066.
+
+## Tocar en vivo
+
+Una pista de instrumento armada («Tocar» en el panel Instrumentos) suena en tiempo real con su
+instrumento: el sintetizador integrado (mismas fórmulas que el render offline, diferencia < 1e-4)
+o su plugin, cargado en su propio proceso con el id `inst:<pista>`. Su botón «Interfaz» abre la del
+plugin; al cerrarla, su estado se guarda en la pista y el audio se regenera.
+
+- **Entrada:** teclados MIDI con winmm (sin bibliotecas externas; omni, notas, pedal CC 64 y
+  CC 120/123) o el teclado del ordenador (A W S E D F T G Y H U J K O L P Ñ, Z/X cambian de octava).
+- **Camino del sonido:** los eventos llegan al hilo de audio por una cola sin bloqueos. Reproduciendo
+  a tempo normal, el sonido entra en su pista antes de los efectos; con la canción parada pasa por
+  sus efectos y su fader; con el tempo cambiado, solo por el fader. El máster sigue procesando
+  mientras hay una pista armada.
+- **Grabación:** con «Grabar notas», cada pulsación se anota en la posición que se oía en ese
+  momento. El evento se sella con el reloj QPC, el mismo con el que cpal dice cuándo suena cada
+  bloque, y se descuentan la latencia del dispositivo, la de los efectos y la del estirador. Al parar
+  el transporte, lo tocado se añade a las notas de la pista (con deshacer) y se regenera su audio.
+  En la app: dos notas tocadas a los ~1,3 s y ~2,6 s de reproducir desde 2 s quedaron en 3,29 s y
+  4,58 s con sus alturas (La4 y Do5).
 
 ## Instrumentos, latencia y sidechain
 

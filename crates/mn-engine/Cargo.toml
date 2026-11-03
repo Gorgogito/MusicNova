@@ -14,5 +14,8 @@ rtrb = "0.3"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Media", "Win32_Media_Audio", "Win32_Media_Multimedia", "Win32_System_Performance"] }
+
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }

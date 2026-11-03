@@ -104,6 +104,7 @@ export type AutomationTarget =
   | { kind: 'volume' }
   | { kind: 'pan' }
   | { kind: 'effect'; slot: string; param: string }
+  | { kind: 'plugin'; slot: string; param: number; name: string; min: number; max: number }
 
 export interface AutoPoint {
   time: number
@@ -289,6 +290,13 @@ export interface ProjectView {
 }
 
 // ---- Fase 6: transcripción ----------------------------------------------------------
+
+/** Tocar en vivo: teclados MIDI conectados, el abierto y la pista armada. */
+export interface LiveStatus {
+  devices: string[]
+  open: string | null
+  armed: string | null
+}
 
 export interface Note {
   /** Segundos de la línea de tiempo. */
@@ -603,6 +611,13 @@ export const api = {
   pluginParams: (slotId: string) => invoke<PluginParam[]>('plugin_params', { slotId }),
   pluginParamSet: (slotId: string, id: number, value: number) => invoke<void>('plugin_param_set', { slotId, id, value }),
   pluginRestart: (slotId: string) => invoke<void>('plugin_restart', { slotId }),
+  liveStatus: () => invoke<LiveStatus>('live_status'),
+  midiOpen: (index: number | null) => invoke<LiveStatus>('midi_open', { index }),
+  liveArm: (trackId: string | null) => invoke<LiveStatus>('live_arm', { trackId }),
+  liveNote: (key: number, velocity: number, on: boolean) => invoke<void>('live_note', { key, velocity, on }),
+  livePanic: () => invoke<void>('live_panic'),
+  liveRecord: (on: boolean) => invoke<void>('live_record', { on }),
+  liveTake: () => invoke<Note[]>('live_take'),
   pluginsSync: () => invoke<void>('plugins_sync'),
   automationSet: (trackId: string | null, lanes: AutomationLane[]) =>
     invoke<AutomationLane[]>('automation_set', { trackId, lanes }),
@@ -619,6 +634,9 @@ export const events = {
     listen<{ done: number; total: number; current: string }>('plugin-scan', (e) => cb(e.payload)),
   recordFinished: (cb: (r: RecordFinished) => void): Promise<UnlistenFn> =>
     listen<RecordFinished>('record-finished', (e) => cb(e.payload)),
+  /** El usuario cerró la ventana de un plugin (id del efecto o `inst:<pista>`). */
+  pluginEditorClosed: (cb: (slotId: string) => void): Promise<UnlistenFn> =>
+    listen<string>('plugin-editor-closed', (e) => cb(e.payload)),
   /** El plugin de un efecto se cayó o dejó de responder (su proceso terminó). */
   pluginFailed: (cb: (e: { slot_id: string; message: string }) => void): Promise<UnlistenFn> =>
     listen<{ slot_id: string; message: string }>('plugin-failed', (e) => cb(e.payload)),

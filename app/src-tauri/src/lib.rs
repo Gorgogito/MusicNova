@@ -4,6 +4,7 @@
 mod plugins;
 mod generate;
 mod instruments;
+mod live;
 mod transcribe;
 mod worker;
 
@@ -178,6 +179,8 @@ fn load_into_engine(state: &AppState, dir: PathBuf, mut project: Project) -> Res
     if let Err(e) = sync_plugin_states(state) {
         eprintln!("[musicnova] estado de plugins: {e}");
     }
+    // Las pistas del motor se vuelven a crear: la pista armada deja de existir.
+    live::forget(state);
     let prepared = prepare_tracks(&dir, &project, rate)?;
     // Proyectos anteriores a los clips (o clips que no encajan con el audio).
     let mut normalized = false;
@@ -296,17 +299,44 @@ fn plugin_errors(project: &Project) -> Vec<String> {
 /// Copia al proyecto el estado actual de sus plugins y lo guarda. Nunca
 /// espera al hilo principal con el cerrojo de la sesión tomado.
 fn sync_plugin_states(state: &AppState) -> Result<(), String> {
-    let mut effects: Vec<EffectSlot> = {
+    let (mut effects, instruments): (Vec<EffectSlot>, Vec<(Uuid, mn_fx::PluginRef)>) = {
         let s = state.session.lock().unwrap();
         let Some(p) = s.project.as_ref() else { return Ok(()) };
-        p.tracks.iter().flat_map(|t| t.effects.iter()).chain(p.master.effects.iter()).filter(|e| e.plugin.is_some()).cloned().collect()
+        let effects =
+            p.tracks.iter().flat_map(|t| t.effects.iter()).chain(p.master.effects.iter()).filter(|e| e.plugin.is_some()).cloned().collect();
+        let instruments = p
+            .tracks
+            .iter()
+            .filter_map(|t| match &t.instrument {
+                Some(mn_core::project::InstrumentSource::Plugin { plugin }) => Some((t.id, plugin.clone())),
+                _ => None,
+            })
+            .collect();
+        (effects, instruments)
     };
-    if effects.is_empty() || !mn_plugin::sync_states(&mut effects) {
+    // Plugins instrumento tocados en vivo (su interfaz cambia el sonido de la pista).
+    let mut fresh_instruments: Vec<(Uuid, String)> = Vec::new();
+    for (id, r) in &instruments {
+        let Some(inst) = mn_plugin::instance(&live::instrument_key(*id)) else { continue };
+        if inst.plugin.path != r.path || inst.plugin.id != r.id || inst.failure().is_some() {
+            continue;
+        }
+        if let Some(st) = inst.state_base64().filter(|st| r.state.as_deref() != Some(st.as_str())) {
+            fresh_instruments.push((*id, st));
+        }
+    }
+    let effects_changed = !effects.is_empty() && mn_plugin::sync_states(&mut effects);
+    if !effects_changed && fresh_instruments.is_empty() {
         return Ok(());
     }
     let mut guard = state.session.lock().unwrap();
     let s = &mut *guard;
     let (Some(p), Some(dir)) = (s.project.as_mut(), s.dir.clone()) else { return Ok(()) };
+    for (id, st) in fresh_instruments {
+        if let Some(mn_core::project::InstrumentSource::Plugin { plugin }) = p.tracks.iter_mut().find(|t| t.id == id).and_then(|t| t.instrument.as_mut()) {
+            plugin.state = Some(st);
+        }
+    }
     for slot in p.tracks.iter_mut().flat_map(|t| t.effects.iter_mut()).chain(p.master.effects.iter_mut()) {
         if let Some(fresh) = effects.iter().find(|e| e.id == slot.id) {
             if let (Some(a), Some(b)) = (slot.plugin.as_mut(), fresh.plugin.as_ref()) {
@@ -1423,6 +1453,9 @@ async fn record_calibrate(app: AppHandle) -> Result<LatencyReport, String> {
 #[tauri::command]
 fn track_remove(state: State<'_, AppState>, track_id: Uuid) -> Result<(), String> {
     let engine = state.engine()?;
+    if live::armed() == Some(track_id) {
+        live::arm(&state, None)?;
+    }
     let mut guard = state.session.lock().unwrap();
     let s = &mut *guard;
     let dir = s.dir.clone().ok_or("no hay ningún proyecto abierto")?;
@@ -1581,6 +1614,13 @@ pub fn run() {
             plugins::plugin_params,
             plugins::plugin_param_set,
             plugins::plugin_restart,
+            live::live_status,
+            live::midi_open,
+            live::live_arm,
+            live::live_note,
+            live::live_panic,
+            live::live_record,
+            live::live_take,
             plugins::plugins_sync,
             transcribe::notes_start,
             transcribe::notes_apply,

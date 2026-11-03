@@ -261,3 +261,85 @@ fn mn_test_violations() -> u32 {
     let f: libloading::Symbol<unsafe extern "C" fn() -> u32> = unsafe { lib.get(b"mn_test_violations") }.unwrap();
     unsafe { f() }
 }
+
+/// Automatización de un parámetro de plugin: la ganancia del plugin de prueba
+/// sigue la curva en la cadena en vivo y en la mezcla offline (exportación).
+fn check_plugin_automation(r: &PluginRef, slot_id: &str) {
+    use mn_core::automation::{AutoPoint, AutomationLane, AutomationTarget, ChannelAutomation};
+    use mn_core::mix::{mixdown, ClipFrames, MixInput};
+    use mn_core::project::MasterSettings;
+    let rate = 48_000;
+    let s = EffectSlot { sidechain: None, id: slot_id.into(), enabled: true, params: EffectParams::Plugin, plugin: Some(r.clone()) };
+    let target = AutomationTarget::Plugin { slot: slot_id.into(), param: 0, name: "Ganancia".into(), min: -60.0, max: 12.0 };
+    // -6 dB durante el primer medio segundo, 0 dB después.
+    let points = vec![AutoPoint { time: 0.0, value: -6.0 }, AutoPoint { time: 0.5, value: -6.0 }, AutoPoint { time: 0.5, value: 0.0 }];
+    let lanes = vec![AutomationLane { id: uuid::Uuid::new_v4(), target: target.clone(), enabled: true, points }];
+    let effects = std::slice::from_ref(&s);
+    assert_eq!(mn_core::automation::sanitize_lanes(lanes.clone(), effects).len(), 1, "el destino es válido");
+    assert_eq!(target.clamp(effects, 40.0), Some(12.0));
+    let auto = ChannelAutomation::build(&lanes, effects, rate).expect("automatización");
+
+    // En vivo: se aplica al inicio de cada bloque.
+    let mut chain = Chain::new(effects, rate);
+    let mut at = |frame: u64| {
+        auto.apply_effects(&mut chain, frame);
+        let mut buf = vec![0.5f32; 2 * 256];
+        chain.process(&mut buf);
+        buf[0]
+    };
+    assert!((at(0) - 0.5 * 0.501_187).abs() < 1e-4, "-6 dB al principio");
+    assert!((at(30_000) - 0.5).abs() < 1e-4, "0 dB después de 0,5 s");
+    assert!((at(256) - 0.5 * 0.501_187).abs() < 1e-4, "al volver atrás, otra vez -6 dB");
+
+    // Exportación: un segundo de 0,5 constante.
+    let data = vec![0.5f32; rate as usize * 2];
+    let clips = [ClipFrames::whole(0, rate as u64)];
+    let input = MixInput { data: &data, clips: &clips, gain_db: 0.0, pan: 0.0, mute: false, solo: false, effects, automation: Some(&auto), sidechain: None };
+    let out = mixdown(&[input], &MasterSettings::default(), None, rate).data;
+    let (early, late) = (out[2 * 1000], out[2 * 40_000]);
+    assert!(late > early * 1.8, "la exportación sigue la curva: {early} → {late}");
+}
+
+#[test]
+fn plugin_parameters_follow_automation() {
+    let f = fixture();
+    check_plugin_automation(&plugin_ref(&f.clap, PluginFormat::Clap), "slot-auto");
+    retain_instances(|id| id != "slot-auto");
+}
+
+/// Plugin instrumento tocado en vivo: notas por bloque (como el motor) → La4.
+fn check_live_plugin_instrument(r: &PluginRef, key: &str) {
+    use mn_fx::LiveNote;
+    let rate = 48_000;
+    let mut inst = mn_plugin::live_instrument(r, rate, key).expect("instrumento en vivo");
+    assert!(instance(key).is_some(), "registrado para abrir su interfaz");
+    let mut buf = vec![0.0f32; 2 * 512];
+    inst.render(&[], &mut buf);
+    assert!(buf.iter().all(|&s| s == 0.0));
+    inst.render(&[LiveNote { time: 100, key: 69, velocity: 127, on: true }], &mut buf);
+    assert!(buf[..200].iter().all(|&s| s == 0.0), "empieza en su frame del bloque");
+    let mut out = Vec::new();
+    for _ in 0..20 {
+        inst.render(&[], &mut buf);
+        out.extend(buf.iter().step_by(2).copied());
+    }
+    let hz = out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (out.len() as f64 / rate as f64);
+    assert!((hz - 440.0).abs() < 10.0, "{hz}");
+    inst.all_notes_off();
+    for _ in 0..4 {
+        inst.render(&[], &mut buf);
+    }
+    assert!(buf.iter().all(|&s| s.abs() < 1e-6), "suelta las notas pulsadas");
+    // `retain_instances` no suelta los instrumentos en vivo; `release_instrument`, sí.
+    retain_instances(|_| false);
+    assert!(instance(key).is_some());
+    mn_plugin::release_instrument(key);
+    assert!(instance(key).is_none());
+}
+
+#[test]
+fn instrument_plugins_play_live() {
+    let f = fixture();
+    let synth = scan_file(&f.clap).unwrap().into_iter().find(|d| d.id == "org.musicnova.test-synth").unwrap();
+    check_live_plugin_instrument(&synth.to_ref(), "inst:live-local");
+}
