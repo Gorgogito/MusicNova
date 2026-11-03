@@ -1,3 +1,4 @@
+import { locale } from '../i18n'
 export function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
   const m = Math.floor(seconds / 60)
@@ -19,7 +20,7 @@ export function formatBytes(bytes: number | null | undefined): string {
 }
 
 export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })
+  return new Date(iso).toLocaleString(locale(), { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 export function toDb(linear: number): number {

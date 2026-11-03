@@ -5,6 +5,7 @@ import { formatTime } from '../lib/format'
 import { TRACK_KINDS } from '../lib/tracks'
 import { GENERATION_LABEL, type GenerationJobs } from '../lib/useGeneration'
 import { Icon } from './Icon'
+import { tr } from '../i18n'
 
 interface Props {
   project: ProjectView
@@ -23,24 +24,24 @@ interface TaskInfo {
 }
 
 const GENERATED_TRACKS: { id: GeneratedTrack; label: string; hint: string }[] = [
-  { id: 'drums', label: 'Batería', hint: 'batería acústica, groove rock con charles en corcheas' },
-  { id: 'bass', label: 'Bajo', hint: 'bajo eléctrico con dedos, línea sencilla que sigue al bombo' },
-  { id: 'guitar', label: 'Guitarra', hint: 'guitarra acústica rasgueada, acordes abiertos' },
-  { id: 'keyboard', label: 'Teclado', hint: 'piano eléctrico con acordes suaves' },
-  { id: 'strings', label: 'Cuerdas', hint: 'sección de cuerdas cálida, notas largas' },
-  { id: 'synth', label: 'Sintetizador', hint: 'pad de sintetizador analógico' },
-  { id: 'percussion', label: 'Percusión', hint: 'percusión latina, congas y shaker' },
-  { id: 'brass', label: 'Metales', hint: 'sección de metales funk con frases cortas' },
-  { id: 'woodwinds', label: 'Vientos de madera', hint: 'flauta y clarinete con melodías suaves' },
-  { id: 'backing_vocals', label: 'Coros', hint: 'coros armonizados «uuh» y «aah»' },
-  { id: 'vocals', label: 'Voz', hint: 'voz principal melódica' },
-  { id: 'fx', label: 'Efectos', hint: 'efectos ambientales y transiciones' },
+  { id: 'drums', label: tr('Batería'), hint: tr('batería acústica, groove rock con charles en corcheas') },
+  { id: 'bass', label: tr('Bajo'), hint: tr('bajo eléctrico con dedos, línea sencilla que sigue al bombo') },
+  { id: 'guitar', label: tr('Guitarra'), hint: tr('guitarra acústica rasgueada, acordes abiertos') },
+  { id: 'keyboard', label: tr('Teclado'), hint: tr('piano eléctrico con acordes suaves') },
+  { id: 'strings', label: tr('Cuerdas'), hint: tr('sección de cuerdas cálida, notas largas') },
+  { id: 'synth', label: tr('Sintetizador'), hint: tr('pad de sintetizador analógico') },
+  { id: 'percussion', label: tr('Percusión'), hint: tr('percusión latina, congas y shaker') },
+  { id: 'brass', label: tr('Metales'), hint: tr('sección de metales funk con frases cortas') },
+  { id: 'woodwinds', label: tr('Vientos de madera'), hint: tr('flauta y clarinete con melodías suaves') },
+  { id: 'backing_vocals', label: tr('Coros'), hint: tr('coros armonizados «uuh» y «aah»') },
+  { id: 'vocals', label: tr('Voz'), hint: tr('voz principal melódica') },
+  { id: 'fx', label: tr('Efectos'), hint: tr('efectos ambientales y transiciones') },
 ]
 
 const QUALITY = [
-  { steps: 16, label: 'Rápida (16 pasos)' },
-  { steps: 32, label: 'Normal (32 pasos)' },
-  { steps: 50, label: 'Alta (50 pasos)' },
+  { steps: 16, label: tr('Rápida (16 pasos)') },
+  { steps: 32, label: tr('Normal (32 pasos)') },
+  { steps: 50, label: tr('Alta (50 pasos)') },
 ]
 
 /** Pistas que se pueden limpiar: todas salvo las generadas por esta fase. */
@@ -86,14 +87,14 @@ export function GenerationPanel(props: Props) {
             {job.message} · {Math.floor(elapsed / 60)}:{String(Math.floor(elapsed % 60)).padStart(2, '0')}
           </span>
           <button className="btn ghost small" onClick={jobs.cancel} disabled={!job.jobId}>
-            <Icon name="x" size={14} /> Cancelar
+            <Icon name="x" size={14} /> {tr('Cancelar')}
           </button>
         </div>
         <div className="progress">
           <div style={{ width: `${job.progress * 100}%` }} />
         </div>
         {job.kind === 'generate' && (
-          <span className="small muted">ACE-Step tarda varios minutos por pista en una GPU de 8 GB; puedes seguir usando la aplicación.</span>
+          <span className="small muted">{tr('ACE-Step tarda varios minutos por pista en una GPU de 8 GB; puedes seguir usando la aplicación.')}</span>
         )}
       </div>
     )
@@ -101,7 +102,7 @@ export function GenerationPanel(props: Props) {
 
   return (
     <div className="panel transcription-panel">
-      {!workerReady && <span className="muted">El proceso de IA se está iniciando…</span>}
+      {!workerReady && <span className="muted">{tr('El proceso de IA se está iniciando…')}</span>}
       <DenoiseSection {...props} models={models} />
       <GenerateSection {...props} tasks={tasks} models={models} />
     </div>
@@ -137,7 +138,7 @@ function DenoiseSection(props: Props & { models: ModelInfo[] | null }) {
     try {
       const region: [number, number] | null = useLoop && hasLoop ? [practice.loop_start, practice.loop_end] : null
       props.onProjectReplaced(await api.denoiseSteady(track.id, { ...steady, noise_region: region }))
-      setStatus('Se añadió la pista sin ruido; la original queda silenciada para comparar (M).')
+      setStatus(tr('Se añadió la pista sin ruido; la original queda silenciada para comparar (M).'))
     } catch (e) {
       props.onError(errorMessage(e))
     } finally {
@@ -148,20 +149,18 @@ function DenoiseSection(props: Props & { models: ModelInfo[] | null }) {
   return (
     <section className="tx-section">
       <h3>
-        <Icon name="wave" size={16} /> Limpiar ruido
+        <Icon name="wave" size={16} /> {tr('Limpiar ruido')}
       </h3>
       <p className="small muted">
-        Crea una versión limpia de una pista; la original queda silenciada para comparar. «Voz» usa una red neuronal
-        (DeepFilterNet3) que separa la voz de cualquier ruido de fondo. «Ruido constante» quita zumbidos, siseo o
-        ventiladores de cualquier instrumento sin tocar el resto.
+        {tr('Crea una versión limpia de una pista; la original queda silenciada para comparar. «Voz» usa una red neuronal (DeepFilterNet3) que separa la voz de cualquier ruido de fondo. «Ruido constante» quita zumbidos, siseo o ventiladores de cualquier instrumento sin tocar el resto.')}
       </p>
       {tracks.length === 0 ? (
-        <span className="small muted">No hay pistas que limpiar.</span>
+        <span className="small muted">{tr('No hay pistas que limpiar.')}</span>
       ) : (
         <>
           <div className="panel-row">
             <label className="field">
-              <span className="small muted">Pista</span>
+              <span className="small muted">{tr('Pista')}</span>
               <select
                 value={track?.id ?? ''}
                 onChange={(e) => {
@@ -178,21 +177,21 @@ function DenoiseSection(props: Props & { models: ModelInfo[] | null }) {
               </select>
             </label>
             <label className="field">
-              <span className="small muted">Tipo</span>
+              <span className="small muted">{tr('Tipo')}</span>
               <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
-                <option value="voice">Voz o habla (IA)</option>
-                <option value="steady">Ruido constante (cualquier instrumento)</option>
+                <option value="voice">{tr('Voz o habla (IA)')}</option>
+                <option value="steady">{tr('Ruido constante (cualquier instrumento)')}</option>
               </select>
             </label>
             {mode === 'voice' ? (
-              <label className="field" title="Cuánto puede bajar el ruido. Un límite deja algo de ambiente y suena más natural">
-                <span className="small muted">Atenuación máxima: {voiceLimit >= 40 ? 'sin límite' : `${voiceLimit} dB`}</span>
+              <label className="field" title={tr('Cuánto puede bajar el ruido. Un límite deja algo de ambiente y suena más natural')}>
+                <span className="small muted">{tr('Atenuación máxima:')} {voiceLimit >= 40 ? tr('sin límite') : `${voiceLimit} dB`}</span>
                 <input type="range" min={6} max={40} step={1} value={voiceLimit} onChange={(e) => setVoiceLimit(Number(e.target.value))} />
               </label>
             ) : (
               <>
-                <label className="field" title="Cuánto se atenúa el ruido como máximo">
-                  <span className="small muted">Reducción {steady.reduction_db} dB</span>
+                <label className="field" title={tr('Cuánto se atenúa el ruido como máximo')}>
+                  <span className="small muted">{tr('Reducción')} {steady.reduction_db} dB</span>
                   <input
                     type="range"
                     min={6}
@@ -202,8 +201,8 @@ function DenoiseSection(props: Props & { models: ModelInfo[] | null }) {
                     onChange={(e) => setSteady({ ...steady, reduction_db: Number(e.target.value) })}
                   />
                 </label>
-                <label className="field" title="Más alta quita más ruido, pero también algo de los sonidos más débiles">
-                  <span className="small muted">Sensibilidad {Math.round(steady.sensitivity * 100)} %</span>
+                <label className="field" title={tr('Más alta quita más ruido, pero también algo de los sonidos más débiles')}>
+                  <span className="small muted">{tr('Sensibilidad')} {Math.round(steady.sensitivity * 100)} %</span>
                   <input
                     type="range"
                     min={0}
@@ -215,28 +214,27 @@ function DenoiseSection(props: Props & { models: ModelInfo[] | null }) {
                 </label>
                 <label
                   className="check small"
-                  title={hasLoop ? 'Marca un bucle A-B sobre un tramo donde solo se oiga el ruido' : 'Marca un bucle A-B (en Práctica) sobre un tramo con solo ruido'}
+                  title={hasLoop ? tr('Marca un bucle A-B sobre un tramo donde solo se oiga el ruido') : tr('Marca un bucle A-B (en Práctica) sobre un tramo con solo ruido')}
                 >
                   <input type="checkbox" checked={useLoop && hasLoop} disabled={!hasLoop} onChange={(e) => setUseLoop(e.target.checked)} />
-                  Tomar el ruido del bucle A-B
+                  {tr('Tomar el ruido del bucle A-B')}
                   {hasLoop && ` (${formatTime(practice.loop_start)}–${formatTime(practice.loop_end)})`}
                 </label>
               </>
             )}
             {mode === 'voice' && models !== null && !dfnInstalled ? (
               <button className="btn primary" onClick={props.onOpenModels}>
-                <Icon name="download" size={16} /> Descargar DeepFilterNet3 (8 MB)
+                <Icon name="download" size={16} /> {tr('Descargar DeepFilterNet3 (8 MB)')}
               </button>
             ) : (
               <button className="btn primary" disabled={busy || !track || (mode === 'voice' && !workerReady)} onClick={run}>
-                <Icon name="star" size={16} /> {busy ? 'Limpiando…' : 'Limpiar'}
+                <Icon name="star" size={16} /> {busy ? tr('Limpiando…') : tr('Limpiar')}
               </button>
             )}
           </div>
           {mode === 'steady' && !useLoop && (
             <span className="small muted">
-              Sin bucle, el ruido se mide en los momentos más silenciosos de la pista (la cuenta previa, las pausas): si la
-              pista no tiene silencios, marca un tramo con solo ruido.
+              {tr('Sin bucle, el ruido se mide en los momentos más silenciosos de la pista (la cuenta previa, las pausas): si la pista no tiene silencios, marca un tramo con solo ruido.')}
             </span>
           )}
         </>
@@ -264,36 +262,34 @@ function GenerateSection(props: Props & { tasks: TaskInfo[] | null; models: Mode
   return (
     <section className="tx-section">
       <h3>
-        <Icon name="music" size={16} /> Generar acompañamiento
+        <Icon name="music" size={16} /> {tr('Generar acompañamiento')}
       </h3>
       <p className="small muted">
-        Crea una pista nueva que encaja con la canción (tempo, tonalidad y estructura) con ACE-Step 1.5 (MIT). Para
-        sustituir una parte, silencia su stem y genera esa pista con «lo que suena ahora» como contexto.
+        {tr('Crea una pista nueva que encaja con la canción (tempo, tonalidad y estructura) con ACE-Step 1.5 (MIT). Para sustituir una parte, silencia su stem y genera esa pista con «lo que suena ahora» como contexto.')}
       </p>
       {tasks === null || models === null ? (
-        <span className="small muted">Comprobando ACE-Step…</span>
+        <span className="small muted">{tr('Comprobando ACE-Step…')}</span>
       ) : !envReady ? (
         <div className="panel-row">
           <span className="small">
-            Paso 1: instalar el entorno de ACE-Step (Python aparte con PyTorch 2.7 para CUDA, unos 3–4 GB). Solo se hace una
-            vez.
+            {tr('Paso 1: instalar el entorno de ACE-Step (Python aparte con PyTorch 2.7 para CUDA, unos 3–4 GB). Solo se hace una vez.')}
           </span>
           <button className="btn primary" disabled={!workerReady} onClick={jobs.installAceStep}>
-            <Icon name="download" size={16} /> Instalar entorno
+            <Icon name="download" size={16} /> {tr('Instalar entorno')}
           </button>
         </div>
       ) : !model?.installed ? (
         <div className="panel-row">
-          <span className="small">Paso 2: descargar el modelo ACE-Step 1.5 base (6,3 GB).</span>
+          <span className="small">{tr('Paso 2: descargar el modelo ACE-Step 1.5 base (6,3 GB).')}</span>
           <button className="btn primary" onClick={props.onOpenModels}>
-            <Icon name="download" size={16} /> Ver modelos
+            <Icon name="download" size={16} /> {tr('Ver modelos')}
           </button>
         </div>
       ) : (
         <>
           <div className="panel-row">
             <label className="field">
-              <span className="small muted">Pista a generar</span>
+              <span className="small muted">{tr('Pista a generar')}</span>
               <select value={track} onChange={(e) => setTrack(e.target.value as GeneratedTrack)}>
                 {GENERATED_TRACKS.map((t) => (
                   <option key={t.id} value={t.id}>
@@ -302,21 +298,21 @@ function GenerateSection(props: Props & { tasks: TaskInfo[] | null; models: Mode
                 ))}
               </select>
             </label>
-            <label className="field grow" title="Describe el estilo de la pista (en inglés suele funcionar mejor)">
-              <span className="small muted">Estilo (opcional)</span>
+            <label className="field grow" title={tr('Describe el estilo de la pista (en inglés suele funcionar mejor)')}>
+              <span className="small muted">{tr('Estilo (opcional)')}</span>
               <input type="text" value={caption} maxLength={512} placeholder={info.hint} onChange={(e) => setCaption(e.target.value)} />
             </label>
           </div>
           <div className="panel-row">
             <label className="field">
-              <span className="small muted">Contexto</span>
+              <span className="small muted">{tr('Contexto')}</span>
               <select value={context} onChange={(e) => setContext(e.target.value as typeof context)}>
-                <option value="audible">Lo que suena ahora{muted.length ? ` (sin ${muted.length} silenciadas)` : ''}</option>
-                <option value="original">Mezcla original</option>
+                <option value="audible">{muted.length ? tr('Lo que suena ahora (sin {n} silenciadas)', { n: muted.length }) : tr('Lo que suena ahora')}</option>
+                <option value="original">{tr('Mezcla original')}</option>
               </select>
             </label>
             <label className="field">
-              <span className="small muted">Calidad</span>
+              <span className="small muted">{tr('Calidad')}</span>
               <select value={steps} onChange={(e) => setSteps(Number(e.target.value))}>
                 {QUALITY.map((q) => (
                   <option key={q.steps} value={q.steps}>
@@ -325,8 +321,8 @@ function GenerateSection(props: Props & { tasks: TaskInfo[] | null; models: Mode
                 ))}
               </select>
             </label>
-            <label className="field" title="La misma semilla repite el mismo resultado; vacía, una distinta cada vez">
-              <span className="small muted">Semilla</span>
+            <label className="field" title={tr('La misma semilla repite el mismo resultado; vacía, una distinta cada vez')}>
+              <span className="small muted">{tr('Semilla')}</span>
               <input type="number" min={0} value={seed} placeholder="aleatoria" onChange={(e) => setSeed(e.target.value)} style={{ width: 110 }} />
             </label>
             <button
@@ -334,14 +330,14 @@ function GenerateSection(props: Props & { tasks: TaskInfo[] | null; models: Mode
               disabled={!workerReady}
               onClick={() => jobs.generate(track, caption.trim() || info.hint, context, steps, seed === '' ? null : Math.max(0, Math.floor(Number(seed))))}
             >
-              <Icon name="star" size={16} /> Generar {info.label.toLowerCase()}
+              <Icon name="star" size={16} /> {tr('Generar')} {info.label.toLowerCase()}
             </button>
           </div>
           <span className="small muted">
             {analysis
-              ? `Se usarán ${Math.round(analysis.bpm)} BPM, ${analysis.beats_per_bar}/4 y ${keyName(analysis.key.tonic, analysis.key.mode as 'major' | 'minor', notation)} del análisis.`
-              : 'Analiza la canción antes para darle a ACE-Step el tempo y la tonalidad.'}{' '}
-            Cada generación se añade como pista nueva; puedes generar varias y quedarte con la mejor.
+              ? tr('Se usarán {bpm} BPM, {meter}/4 y {key} del análisis.', { bpm: Math.round(analysis.bpm), meter: analysis.beats_per_bar, key: keyName(analysis.key.tonic, analysis.key.mode as 'major' | 'minor', notation) })
+              : tr('Analiza la canción antes para darle a ACE-Step el tempo y la tonalidad.')}{' '}
+            {tr('Cada generación se añade como pista nueva; puedes generar varias y quedarte con la mejor.')}
           </span>
         </>
       )}

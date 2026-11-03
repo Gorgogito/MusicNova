@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type Lyrics } from './api'
+import { tr } from '../i18n'
 
 export interface LyricsJob {
   jobId: string | null
@@ -31,7 +32,7 @@ export function useLyrics(onApplied: (lyrics: Lyrics) => void, onError: (m: stri
             .finally(() => setJob(null))
           break
         case 'job.failed':
-          onError(`La transcripción falló: ${ev.data.error}`)
+          onError(tr('La transcripción falló: {error}', { error: ev.data.error }))
           setJob(null)
           break
         case 'job.cancelled':
@@ -46,7 +47,7 @@ export function useLyrics(onApplied: (lyrics: Lyrics) => void, onError: (m: stri
 
   const start = useCallback(
     async (modelId: string | undefined, language: string, device: string) => {
-      setJob({ jobId: null, progress: 0, message: 'preparando audio…' })
+      setJob({ jobId: null, progress: 0, message: tr('preparando audio…') })
       try {
         const { job_id } = await api.lyricsStart(modelId, language, device)
         setJob((j) => j && { ...j, jobId: job_id })

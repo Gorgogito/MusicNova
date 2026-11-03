@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type GeneratedTrack, type ProjectView } from './api'
+import { tr } from '../i18n'
 
 export type GenerationKind = 'voice' | 'generate' | 'install'
 
@@ -14,9 +15,9 @@ export interface GenerationJob {
 }
 
 export const GENERATION_LABEL: Record<GenerationKind, string> = {
-  voice: 'Limpiando la voz',
-  generate: 'Generando acompañamiento',
-  install: 'Instalando ACE-Step',
+  voice: tr('Limpiando la voz'),
+  generate: tr('Generando acompañamiento'),
+  install: tr('Instalando ACE-Step'),
 }
 
 /** Sigue el trabajo de IA generativa en curso (uno a la vez; vive en App). */
@@ -48,7 +49,7 @@ export function useGeneration(onProject: (p: ProjectView) => void, onInstalled: 
           break
         }
         case 'job.failed':
-          onError(`${GENERATION_LABEL[current.kind]}: falló (${ev.data.error})`)
+          onError(tr('{task}: falló ({error})', { task: GENERATION_LABEL[current.kind], error: ev.data.error }))
           setJob(null)
           break
         case 'job.cancelled':
@@ -64,10 +65,10 @@ export function useGeneration(onProject: (p: ProjectView) => void, onInstalled: 
   const run = useCallback(
     async (kind: GenerationKind, target: string | null, start: () => Promise<{ job_id: string }>) => {
       if (jobRef.current) {
-        onError('Ya hay un trabajo de IA generativa en curso')
+        onError(tr('Ya hay un trabajo de IA generativa en curso'))
         return
       }
-      const pending = { kind, target, jobId: null, progress: 0, message: 'preparando audio…', startedAt: Date.now() }
+      const pending = { kind, target, jobId: null, progress: 0, message: tr('preparando audio…'), startedAt: Date.now() }
       jobRef.current = pending
       setJob(pending)
       try {

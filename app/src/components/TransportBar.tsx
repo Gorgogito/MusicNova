@@ -2,6 +2,7 @@ import { api, errorMessage, type PracticeSettings, type TransportEvent } from '.
 import { formatTime } from '../lib/format'
 import { Icon } from './Icon'
 import { Meter } from './Meter'
+import { tr } from '../i18n'
 
 interface Props {
   transport: TransportEvent
@@ -18,12 +19,12 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
   return (
     <footer className="transport">
       <div className="transport-buttons">
-        <button className="icon-btn" title="Ir al inicio (Inicio)" disabled={!enabled || transport.recording} onClick={() => run(api.seek(0))}>
+        <button className="icon-btn" title={tr('Ir al inicio (Inicio)')} disabled={!enabled || transport.recording} onClick={() => run(api.seek(0))}>
           <Icon name="back" />
         </button>
         <button
           className="icon-btn play"
-          title={transport.recording ? 'Detener la grabación (Espacio)' : playing ? 'Pausa (Espacio)' : 'Reproducir (Espacio)'}
+          title={transport.recording ? tr('Detener la grabación (Espacio)') : playing ? tr('Pausa (Espacio)') : tr('Reproducir (Espacio)')}
           disabled={!enabled}
           onClick={() => run(playing || transport.counting_in ? api.pause() : api.play())}
         >
@@ -31,7 +32,7 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
         </button>
         <button
           className="icon-btn"
-          title="Detener"
+          title={tr('Detener')}
           disabled={!enabled}
           onClick={() => run(transport.recording ? api.pause() : api.pause().then(() => api.seek(0)))}
         >
@@ -44,7 +45,7 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
         <span className="muted"> / {formatTime(duration)}</span>
         <div className="transport-badges">
           {transport.recording && !transport.counting_in && <span className="badge rec">● REC {formatTime(transport.recorded)}</span>}
-          {transport.counting_in && <span className="badge warn">Cuenta previa…</span>}
+          {transport.counting_in && <span className="badge warn">{tr('Cuenta previa…')}</span>}
           {practice && practice.tempo !== 1 && <span className="badge">{Math.round(practice.tempo * 100)}%</span>}
           {practice && practice.pitch !== 0 && (
             <span className="badge">
@@ -52,8 +53,8 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
               {practice.pitch} st
             </span>
           )}
-          {practice?.loop_enabled && <span className="badge ok">Bucle</span>}
-          {practice?.metronome && <span className="badge">Metrónomo</span>}
+          {practice?.loop_enabled && <span className="badge ok">{tr('Bucle')}</span>}
+          {practice?.metronome && <span className="badge">{tr('Metrónomo')}</span>}
         </div>
       </div>
 
@@ -67,7 +68,7 @@ export function TransportBar({ transport, enabled, practice, onError }: Props) {
         disabled={!enabled || transport.recording}
         style={{ ['--pct' as string]: `${pct}%` }}
         onChange={(e) => run(api.seek(Number(e.target.value)))}
-        aria-label="Posición"
+        aria-label={tr('Posición')}
       />
 
       <Meter left={transport.peak_l} right={transport.peak_r} />

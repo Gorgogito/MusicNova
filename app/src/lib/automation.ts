@@ -1,6 +1,7 @@
 // Automatización: destinos posibles de cada canal, rangos y utilidades de curva.
 import type { AutomationLane, AutomationTarget, AutoPoint, EffectSlot, PluginParam } from './api'
 import { CONTROLS, EFFECT_LABELS, formatValue, type Control } from './effects'
+import { tr } from '../i18n'
 
 export interface TargetInfo {
   key: string
@@ -20,14 +21,14 @@ const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1
 
 /** Destino de un parámetro de plugin (con su nombre y rango guardados en el carril). */
 function pluginTarget(slot: EffectSlot | undefined, t: Extract<AutomationTarget, { kind: 'plugin' }>): TargetInfo {
-  const plugin = slot?.plugin?.name ?? 'Plugin'
+  const plugin = slot?.plugin?.name ?? tr('Plugin')
   return { key: targetKey(t), target: t, label: `${plugin} · ${t.name}`, min: t.min, max: t.max, log: false, format: fmt }
 }
 
 const VOLUME: TargetInfo = {
   key: 'volume',
   target: { kind: 'volume' },
-  label: 'Volumen',
+  label: tr('Volumen'),
   min: -60,
   max: 12,
   log: false,
@@ -37,11 +38,11 @@ const VOLUME: TargetInfo = {
 const PAN: TargetInfo = {
   key: 'pan',
   target: { kind: 'pan' },
-  label: 'Panorama',
+  label: tr('Panorama'),
   min: -1,
   max: 1,
   log: false,
-  format: (v) => (Math.abs(v) < 0.01 ? 'Centro' : `${v < 0 ? 'Izq.' : 'Der.'} ${Math.round(Math.abs(v) * 100)} %`),
+  format: (v) => (Math.abs(v) < 0.01 ? tr('Centro') : `${v < 0 ? 'Izq.' : 'Der.'} ${Math.round(Math.abs(v) * 100)} %`),
 }
 
 /** Destinos automatizables de un canal: volumen, panorama (no en el máster) y

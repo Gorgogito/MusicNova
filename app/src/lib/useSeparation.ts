@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type ProjectView, type SeparationResult } from './api'
+import { tr } from '../i18n'
 
 export interface SeparationJob {
   jobId: string | null
@@ -30,7 +31,7 @@ export function useSeparation(onProject: (p: ProjectView) => void, onError: (m: 
           break
         case 'job.done': {
           const result = ev.data.result as SeparationResult
-          setJob({ ...current, progress: 1, message: 'cargando stems…' })
+          setJob({ ...current, progress: 1, message: tr('cargando stems…') })
           api
             .separateApply(result.stems)
             .then((p) => {
@@ -42,7 +43,7 @@ export function useSeparation(onProject: (p: ProjectView) => void, onError: (m: 
           break
         }
         case 'job.failed':
-          onError(`La separación falló: ${ev.data.error}`)
+          onError(tr('La separación falló: {error}', { error: ev.data.error }))
           setJob(null)
           break
         case 'job.cancelled':
@@ -57,7 +58,7 @@ export function useSeparation(onProject: (p: ProjectView) => void, onError: (m: 
 
   const start = useCallback(
     async (modelId: string, device: string) => {
-      setJob({ jobId: null, modelId, progress: 0, message: 'preparando audio…' })
+      setJob({ jobId: null, modelId, progress: 0, message: tr('preparando audio…') })
       try {
         const { job_id } = await api.separateStart(modelId, device)
         setJob((j) => j && { ...j, jobId: job_id })

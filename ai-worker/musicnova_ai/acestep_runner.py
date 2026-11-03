@@ -28,6 +28,11 @@ def emit(kind: str, payload) -> None:
     sys.stdout.flush()
 
 
+def emit_progress(value: float, message: str) -> None:
+    """Avance (0–1) y mensaje visible (la interfaz lo traduce)."""
+    emit("PROGRESS", f"{value:.3f} {message}")
+
+
 def main() -> int:
     params = json.load(open(sys.argv[1], encoding="utf-8"))
     track = params["track"]
@@ -38,7 +43,7 @@ def main() -> int:
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     started = time.monotonic()
-    emit("PROGRESS", "0.01 cargando ACE-Step")
+    emit_progress(0.01, "cargando ACE-Step")
 
     from acestep.handler import AceStepHandler
     from acestep.inference import GenerationConfig, GenerationParams, generate_music
@@ -56,14 +61,14 @@ def main() -> int:
     )
     if not ok:
         raise RuntimeError(f"no se pudo cargar ACE-Step: {status}")
-    emit("PROGRESS", "0.08 modelo cargado")
+    emit_progress(0.08, "modelo cargado")
 
     def progress(value, desc=None, **_):
         try:
             v = float(value)
         except (TypeError, ValueError):
             return
-        emit("PROGRESS", f"{0.08 + 0.9 * max(0.0, min(1.0, v)):.3f} {desc or 'generando'}")
+        emit_progress(0.08 + 0.9 * max(0.0, min(1.0, v)), desc or "generando")
 
     gp = GenerationParams(
         task_type="lego",

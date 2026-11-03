@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Analysis, Chord, PracticeSettings } from '../lib/api'
 import { canonicalLabel, chordIndexAt, chordName, chordShift, mod12, parseChord, prefersFlats, type Notation } from '../lib/chords'
+import { tr } from '../i18n'
 
 interface Props {
   analysis: Analysis
@@ -33,7 +34,7 @@ export function AnalysisLanes({ analysis, practice, duration, position, notation
     setEditing(null)
     const parsed = parseChord(text)
     if (!parsed) {
-      if (text.trim()) onError(`No se reconoce el acorde «${text}». Ejemplos: Am7, F#, Sib, Lam, N`)
+      if (text.trim()) onError(tr('No se reconoce el acorde «{chord}». Ejemplos: Am7, F#, Sib, Lam, N', { chord: text }))
       return
     }
     // Lo escrito está en el tono mostrado: se vuelve al tono original del audio.
@@ -70,7 +71,7 @@ export function AnalysisLanes({ analysis, practice, duration, position, notation
     <>
       <div className="lane analysis-lane sections-lane">
         <div className="lane-header compact-header">
-          <span className="small muted">Secciones</span>
+          <span className="small muted">{tr('Secciones')}</span>
         </div>
         <div className="analysis-track">
           {analysis.sections.map((s, i) => {
@@ -82,7 +83,7 @@ export function AnalysisLanes({ analysis, practice, duration, position, notation
                 style={{ left: pct(s.start), width: width(s.start, s.end), ['--hue' as string]: hue }}
                 onMouseDown={(e) => e.button === 0 && onSeek(s.start)}
                 onDoubleClick={() => setEditing({ kind: 'section', index: i })}
-                title={`${s.label} · doble clic para renombrar`}
+                title={tr('{label} · doble clic para renombrar', { label: s.label })}
               >
                 {editing?.kind === 'section' && editing.index === i ? (
                   editor(s.label, (v) => commitSection(i, v))
@@ -91,7 +92,7 @@ export function AnalysisLanes({ analysis, practice, duration, position, notation
                     <span>{s.label}</span>
                     <button
                       className="section-loop"
-                      title="Repetir esta sección en bucle"
+                      title={tr('Repetir esta sección en bucle')}
                       onMouseDown={(e) => {
                         e.stopPropagation()
                         onLoop(s.start, s.end)
@@ -108,7 +109,7 @@ export function AnalysisLanes({ analysis, practice, duration, position, notation
       </div>
       <div className="lane analysis-lane chords-lane">
         <div className="lane-header compact-header">
-          <span className="small muted">Acordes</span>
+          <span className="small muted">{tr('Acordes')}</span>
         </div>
         <div className="analysis-track">
           {analysis.downbeats.map((d) => (
@@ -122,7 +123,7 @@ export function AnalysisLanes({ analysis, practice, duration, position, notation
                 style={{ left: pct(c.start), width: width(c.start, c.end) }}
                 onMouseDown={(e) => e.button === 0 && onSeek(c.start)}
                 onDoubleClick={() => setEditing({ kind: 'chord', index: i })}
-                title={`${display(c) || 'Sin acorde'} · doble clic para corregir`}
+                title={tr('{chord} · doble clic para corregir', { chord: display(c) || tr('Sin acorde') })}
               >
                 {editing?.kind === 'chord' && editing.index === i ? editor(display(c), (v) => commitChord(i, v)) : display(c)}
               </div>

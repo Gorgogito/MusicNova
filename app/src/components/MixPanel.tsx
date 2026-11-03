@@ -2,6 +2,7 @@ import type { EffectSlot, MasterSettings, TrackView } from '../lib/api'
 import { EFFECT_LABELS } from '../lib/effects'
 import { TRACK_KINDS } from '../lib/tracks'
 import { EffectRack } from './EffectRack'
+import { tr } from '../i18n'
 
 interface Props {
   tracks: TrackView[]
@@ -18,12 +19,12 @@ interface Props {
 const LUFS_MIN = -40
 /** Niveles a los que normalizan las plataformas de streaming. */
 const TARGETS = [
-  { lufs: -14, label: 'Spotify / YouTube' },
-  { lufs: -16, label: 'Apple Music' },
+  { lufs: -14, label: tr('Spotify / YouTube') },
+  { lufs: -16, label: tr('Apple Music') },
 ]
 
 const summary = (effects: EffectSlot[]) =>
-  effects.filter((e) => e.enabled).map((e) => (e.params.type === 'plugin' ? (e.plugin?.name ?? 'Plugin') : EFFECT_LABELS[e.params.type])).join(' · ') || 'sin efectos'
+  effects.filter((e) => e.enabled).map((e) => (e.params.type === 'plugin' ? (e.plugin?.name ?? tr('Plugin')) : EFFECT_LABELS[e.params.type])).join(' · ') || tr('sin efectos')
 
 export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffects, onMasterEffects, onMasterGain }: Props) {
   const track = selected ? tracks.find((t) => t.id === selected) : undefined
@@ -36,7 +37,7 @@ export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffe
         <button className={`mix-channel ${selected === null ? 'on' : ''}`} onClick={() => onSelect(null)}>
           <span className="lane-chip" style={{ background: 'var(--accent)' }} />
           <span>
-            <strong>Máster</strong>
+            <strong>{tr('Máster')}</strong>
             <span className="small muted">{summary(master.effects)}</span>
           </span>
         </button>
@@ -55,7 +56,7 @@ export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffe
         {track ? (
           <>
             <p className="small muted">
-              Efectos de <strong>{track.name}</strong>: se aplican antes del volumen y el panorama, y también al exportar.
+              {tr('Efectos de «{name}»: se aplican antes del volumen y el panorama, y también al exportar.', { name: track.name })}
             </p>
             <EffectRack
               effects={track.effects}
@@ -69,16 +70,16 @@ export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffe
               <div className="lufs">
                 <div className="lufs-values">
                   <span>
-                    <span className="small muted">Momentáneo</span>
+                    <span className="small muted">{tr('Momentáneo')}</span>
                     <strong className="mono">{fmt(lufs.m)}</strong>
                   </span>
                   <span>
-                    <span className="small muted">Corto plazo (3 s)</span>
+                    <span className="small muted">{tr('Corto plazo (3 s)')}</span>
                     <strong className="mono">{fmt(lufs.s)}</strong>
                   </span>
                   <span className="small muted">LUFS</span>
                 </div>
-                <div className="lufs-bar" title="Sonoridad a corto plazo">
+                <div className="lufs-bar" title={tr('Sonoridad a corto plazo')}>
                   <div className="lufs-fill" style={{ width: `${pct(lufs.s)}%` }} />
                   <div className="lufs-m" style={{ left: `${pct(lufs.m)}%` }} />
                   {TARGETS.map((t) => (
@@ -89,7 +90,7 @@ export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffe
                 </div>
               </div>
               <label className="fx-control master-gain">
-                <span className="small muted">Ganancia máster</span>
+                <span className="small muted">{tr('Ganancia máster')}</span>
                 <input
                   type="range"
                   min={-24}
@@ -103,8 +104,7 @@ export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffe
               </label>
             </div>
             <p className="small muted">
-              Efectos del máster: se aplican a la mezcla completa después del cambio de tempo y tono. Un limitador al
-              final evita la saturación al exportar.
+              {tr('Efectos del máster: se aplican a la mezcla completa después del cambio de tempo y tono. Un limitador al final evita la saturación al exportar.')}
             </p>
             <EffectRack effects={master.effects} onChange={onMasterEffects} />
           </>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, errorMessage, type ModelInfo, type SeparationResult } from '../lib/api'
 import type { SeparationJob } from '../lib/useSeparation'
 import { Icon } from './Icon'
+import { tr, trBackend } from '../i18n'
 
 interface Props {
   job: SeparationJob | null
@@ -34,10 +35,10 @@ export function SeparationPanel({ job, lastResult, workerReady, onStart, onCance
     return (
       <div className="panel">
         <div className="panel-row">
-          <strong>Separando con {job.modelId}</strong>
+          <strong>{tr('Separando con')} {job.modelId}</strong>
           <span className="muted small">{job.message}</span>
           <button className="btn ghost small" onClick={onCancel} disabled={!job.jobId || job.progress >= 1}>
-            <Icon name="x" size={14} /> Cancelar
+            <Icon name="x" size={14} /> {tr('Cancelar')}
           </button>
         </div>
         <div className="progress">
@@ -47,14 +48,14 @@ export function SeparationPanel({ job, lastResult, workerReady, onStart, onCance
     )
   }
 
-  if (!workerReady) return <div className="panel muted">El proceso de IA se está iniciando…</div>
+  if (!workerReady) return <div className="panel muted">{tr('El proceso de IA se está iniciando…')}</div>
 
   if (models && models.length === 0) {
     return (
       <div className="panel panel-row">
-        <span>Para separar stems necesitas descargar un modelo de separación (una sola vez).</span>
+        <span>{tr('Para separar stems necesitas descargar un modelo de separación (una sola vez).')}</span>
         <button className="btn primary" onClick={onOpenModels}>
-          <Icon name="download" size={16} /> Ver modelos
+          <Icon name="download" size={16} /> {tr('Ver modelos')}
         </button>
       </div>
     )
@@ -65,24 +66,24 @@ export function SeparationPanel({ job, lastResult, workerReady, onStart, onCance
     <div className="panel">
       <div className="panel-row">
         <label className="field">
-          <span className="small muted">Modelo</span>
+          <span className="small muted">{tr('Modelo')}</span>
           <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
             {models?.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.name}
+                {trBackend(m.name)}
               </option>
             ))}
           </select>
         </label>
         <label className="field">
-          <span className="small muted">Procesar con</span>
+          <span className="small muted">{tr('Procesar con')}</span>
           <select value={device} onChange={(e) => setDevice(e.target.value)}>
-            <option value="auto">Automático (GPU si está disponible)</option>
+            <option value="auto">{tr('Automático (GPU si está disponible)')}</option>
             <option value="cpu">CPU</option>
           </select>
         </label>
         <button className="btn primary" disabled={!modelId} onClick={() => onStart(modelId, device)}>
-          <Icon name="model" size={16} /> Separar
+          <Icon name="model" size={16} /> {tr('Separar')}
         </button>
       </div>
       {selected?.stems && <p className="small muted">Stems: {selected.stems.join(' · ')}</p>}

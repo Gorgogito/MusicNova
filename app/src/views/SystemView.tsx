@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon'
 import { open } from '@tauri-apps/plugin-dialog'
 import { FORMAT_LABEL, scanPlugins, usePlugins } from '../lib/plugins'
 import { formatDate } from '../lib/format'
+import { LANGS, lang, plural, setLang, tr, type Lang, trBackend } from '../i18n'
 
 /** Carpetas, escaneo y resultado de los plugins CLAP/VST3. */
 function PluginsCard({ onError }: { onError: (m: string) => void }) {
@@ -22,12 +23,11 @@ function PluginsCard({ onError }: { onError: (m: string) => void }) {
   return (
     <article className="card plugins-card">
       <div className="model-head">
-        <h3>Plugins CLAP y VST3</h3>
-        {cache?.scanned_at && <span className="badge">{cache.plugins.length} efectos</span>}
+        <h3>{tr('Plugins CLAP y VST3')}</h3>
+        {cache?.scanned_at && <span className="badge">{plural(cache.plugins.length, '{n} plugin', '{n} plugins')}</span>}
       </div>
       <p className="small muted">
-        Se buscan en las carpetas estándar y en las que añadas. Cada archivo se examina en un proceso aparte, así que un
-        plugin defectuoso no cierra MusicNova durante el escaneo. Al usarlos, los plugins se ejecutan dentro de la app.
+        {tr('Se buscan en las carpetas estándar y en las que añadas. Cada archivo se examina en un proceso aparte, así que un plugin defectuoso no cierra MusicNova durante el escaneo. Al usarlos, cada plugin corre en su propio proceso: si falla, MusicNova sigue funcionando.')}
       </p>
       <ul className="folder-list small">
         {(cache?.default_folders ?? []).map((f) => (
@@ -38,7 +38,7 @@ function PluginsCard({ onError }: { onError: (m: string) => void }) {
         {folders.map((f) => (
           <li key={f} className="mono">
             {f}
-            <button className="icon-btn small" title="Quitar carpeta" onClick={() => setEdited(folders.filter((x) => x !== f))}>
+            <button className="icon-btn small" title={tr('Quitar carpeta')} onClick={() => setEdited(folders.filter((x) => x !== f))}>
               <Icon name="x" size={12} />
             </button>
           </li>
@@ -46,7 +46,7 @@ function PluginsCard({ onError }: { onError: (m: string) => void }) {
       </ul>
       <div className="panel-row">
         <button className="btn ghost small" onClick={addFolder} disabled={!!scanning}>
-          <Icon name="folder" size={14} /> Añadir carpeta
+          <Icon name="folder" size={14} /> {tr('Añadir carpeta')}
         </button>
         <button
           className="btn primary small"
@@ -57,13 +57,13 @@ function PluginsCard({ onError }: { onError: (m: string) => void }) {
               .catch((e) => onError(errorMessage(e)))
           }
         >
-          <Icon name="refresh" size={14} /> {cache?.scanned_at ? 'Volver a escanear' : 'Escanear'}
+          <Icon name="refresh" size={14} /> {cache?.scanned_at ? tr('Volver a escanear') : tr('Escanear')}
         </button>
       </div>
       {scanning && (
         <div className="job">
           <span className="small muted ellipsis">
-            {scanning.total ? `${scanning.done} de ${scanning.total} · ${scanning.current.split(/[\\/]/).pop()}` : 'Buscando archivos…'}
+            {scanning.total ? tr('{done} de {total} · {file}', { done: scanning.done, total: scanning.total, file: scanning.current.split(/[\\/]/).pop() ?? '' }) : tr('Buscando archivos…')}
           </span>
           <span />
           <div className="progress">
@@ -74,7 +74,7 @@ function PluginsCard({ onError }: { onError: (m: string) => void }) {
       {cache?.scanned_at && !scanning && (
         <>
           <p className="small">
-            {count('clap')} CLAP · {count('vst3')} VST3 · último escaneo {formatDate(cache.scanned_at)}
+            {count('clap')} CLAP · {count('vst3')} VST3 · {tr('último escaneo {date}', { date: formatDate(cache.scanned_at) })}
           </p>
           {cache.plugins.length > 0 && (
             <ul className="plugin-list small">
@@ -88,13 +88,13 @@ function PluginsCard({ onError }: { onError: (m: string) => void }) {
           {cache.failed.length > 0 && (
             <>
               <button className="link small" onClick={() => setShowFailed(!showFailed)}>
-                {cache.failed.length} {cache.failed.length === 1 ? 'archivo no se pudo cargar' : 'archivos no se pudieron cargar'}
+                {plural(cache.failed.length, '{n} archivo no se pudo cargar', '{n} archivos no se pudieron cargar')}
               </button>
               {showFailed && (
                 <ul className="plugin-list small">
                   {cache.failed.map((f) => (
                     <li key={f.path} title={f.path}>
-                      <span className="mono">{f.path.split(/[\\/]/).pop()}</span> <span className="muted">· {f.error}</span>
+                      <span className="mono">{f.path.split(/[\\/]/).pop()}</span> <span className="muted">· {trBackend(f.error)}</span>
                     </li>
                   ))}
                 </ul>
@@ -108,10 +108,10 @@ function PluginsCard({ onError }: { onError: (m: string) => void }) {
 }
 
 const STATE_LABEL: Record<WorkerStatus['state'], string> = {
-  stopped: 'Detenido',
-  starting: 'Iniciando…',
-  ready: 'Listo',
-  crashed: 'Con errores',
+  stopped: tr('Detenido'),
+  starting: tr('Iniciando…'),
+  ready: tr('Listo'),
+  crashed: tr('Con errores'),
 }
 
 export function SystemView({ info, worker, onError }: { info: AppInfo | null; worker: WorkerStatus | null; onError: (m: string) => void }) {
@@ -125,30 +125,40 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
   const accel = sys?.torch?.cuda
     ? `CUDA ${sys.torch.cuda_version ?? ''}`
     : sys?.torch
-      ? 'PyTorch en CPU'
-      : 'PyTorch no instalado (se instalará con el primer modelo que lo necesite)'
+      ? tr('PyTorch en CPU')
+      : tr('PyTorch no instalado (se instalará con el primer modelo que lo necesite)')
 
   return (
     <section className="system">
       <header className="view-header">
         <div>
-          <h1>Sistema</h1>
+          <h1>{tr('Sistema')}</h1>
           <p className="muted">MusicNova {info?.version} · GPL-3.0</p>
         </div>
+        <label className="field">
+          <span className="small muted">Idioma · Language</span>
+          <select value={lang()} onChange={(e) => setLang(e.target.value as Lang)}>
+            {LANGS.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </header>
 
       <div className="card-grid">
         <article className="card">
-          <h3>Audio</h3>
+          <h3>{tr('Audio')}</h3>
           {info?.engine_error ? (
             <p className="error-text">{info.engine_error}</p>
           ) : (
             <dl>
-              <dt>Dispositivo</dt>
+              <dt>{tr('Dispositivo')}</dt>
               <dd>{info?.device ?? '—'}</dd>
-              <dt>Frecuencia</dt>
+              <dt>{tr('Frecuencia')}</dt>
               <dd>{info?.sample_rate ? `${info.sample_rate} Hz` : '—'}</dd>
-              <dt>Proyectos</dt>
+              <dt>{tr('Proyectos')}</dt>
               <dd className="mono small">{info?.projects_root}</dd>
             </dl>
           )}
@@ -156,15 +166,15 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
 
         <article className="card">
           <div className="model-head">
-            <h3>Proceso de IA</h3>
+            <h3>{tr('Proceso de IA')}</h3>
             <span className={`badge ${worker?.state === 'ready' ? 'ok' : worker?.state === 'crashed' ? 'warn' : ''}`}>
               {worker ? STATE_LABEL[worker.state] : '—'}
             </span>
           </div>
           <dl>
-            <dt>Python</dt>
+            <dt>{tr('Python')}</dt>
             <dd className="mono small">{sys?.python ? `${sys.python} · ${worker?.python}` : worker?.python}</dd>
-            <dt>Datos</dt>
+            <dt>{tr('Datos')}</dt>
             <dd className="mono small">{sys?.data_dir ?? '—'}</dd>
           </dl>
           {worker?.error && <p className="error-text">{worker.error}</p>}
@@ -172,13 +182,13 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
             <pre className="log">{worker.stderr_tail.join('\n')}</pre>
           )}
           <button className="btn ghost" onClick={() => api.workerRestart().catch((e) => onError(errorMessage(e)))}>
-            <Icon name="refresh" size={16} /> Reiniciar
+            <Icon name="refresh" size={16} /> {tr('Reiniciar')}
           </button>
         </article>
 
         <article className="card">
-          <h3>Hardware</h3>
-          {!sys && worker?.state === 'ready' && <span className="small muted">Comprobando el equipo…</span>}
+          <h3>{tr('Hardware')}</h3>
+          {!sys && worker?.state === 'ready' && <span className="small muted">{tr('Comprobando el equipo…')}</span>}
           <dl>
             <dt>CPU</dt>
             <dd>{sys ? `${sys.cpu_count} hilos · ${sys.machine}` : '—'}</dd>
@@ -190,11 +200,11 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
                 ? '—'
                 : sys.gpus.length
                   ? sys.gpus.map((g) => `${g.name} (${formatBytes(g.vram_bytes)})`).join(', ')
-                  : 'No se detectó GPU NVIDIA'}
+                  : tr('No se detectó GPU NVIDIA')}
             </dd>
-            <dt>Aceleración</dt>
+            <dt>{tr('Aceleración')}</dt>
             <dd>{sys ? accel : '—'}</dd>
-            <dt>Sistema</dt>
+            <dt>{tr('Sistema')}</dt>
             <dd className="small">{sys?.platform ?? '—'}</dd>
           </dl>
         </article>

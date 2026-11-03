@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { toDb } from '../lib/format'
+import { tr } from '../i18n'
 
 const FLOOR_DB = -48
 
 /** Medidor de pico estéreo con caída suave. */
-export function Meter({ left, right, title = 'Nivel de salida' }: { left: number; right: number; title?: string }) {
+export function Meter({ left, right, title = tr('Nivel de salida') }: { left: number; right: number; title?: string }) {
   const [levels, setLevels] = useState({ l: FLOOR_DB, r: FLOOR_DB })
   const held = useRef({ l: FLOOR_DB, r: FLOOR_DB })
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type MasterReferenceResult, type ProjectView } from './api'
+import { tr } from '../i18n'
 
 export interface MasterJob {
   jobId: string | null
@@ -28,7 +29,7 @@ export function useMasterReference(
           break
         case 'job.done': {
           const result = ev.data.result as MasterReferenceResult
-          setJob({ ...current, progress: 1, message: 'cargando el master…' })
+          setJob({ ...current, progress: 1, message: tr('cargando el master…') })
           api
             .masterReferenceApply(result.output, result.reference)
             .then((p) => onApplied(p, result))
@@ -37,7 +38,7 @@ export function useMasterReference(
           break
         }
         case 'job.failed':
-          onError(`La masterización falló: ${ev.data.error}`)
+          onError(tr('La masterización falló: {error}', { error: ev.data.error }))
           setJob(null)
           break
         case 'job.cancelled':
@@ -52,7 +53,7 @@ export function useMasterReference(
 
   const start = useCallback(
     async (reference: string) => {
-      setJob({ jobId: null, progress: 0, message: 'preparando la mezcla…' })
+      setJob({ jobId: null, progress: 0, message: tr('preparando la mezcla…') })
       try {
         const { job_id } = await api.masterReferenceStart(reference)
         setJob((j) => j && { ...j, jobId: job_id })

@@ -2,6 +2,7 @@ import { memo, useMemo, useRef, useState } from 'react'
 import type { Note, PitchCurve } from '../lib/api'
 import type { Notation } from '../lib/chords'
 import { curveMidi, isBlackKey, moveNote, pitchLabel, pitchRange, resizeNote, sortNotes, voicedRuns } from '../lib/notes'
+import { tr } from '../i18n'
 
 interface Props {
   notes: Note[]
@@ -217,7 +218,7 @@ export const NotesLane = memo(function NotesLane({
         <div
           key={i}
           className={`pr-note ${i === selected ? 'selected' : ''}`}
-          title={`${label(n.pitch)} · ${(n.end - n.start).toFixed(2)} s · vel. ${n.velocity}${n.bends?.length ? ' · con curva de tono' : ''}`}
+          title={`${label(n.pitch)} · ${(n.end - n.start).toFixed(2)} s · vel. ${n.velocity}${n.bends?.length ? tr(' · con curva de tono') : ''}`}
           style={{
             left: `${(n.start / duration) * 100}%`,
             width: `${((n.end - n.start) / duration) * 100}%`,

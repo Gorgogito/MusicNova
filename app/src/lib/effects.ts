@@ -1,13 +1,14 @@
 // Descripción de los efectos para la interfaz: nombres, valores por defecto y
 // controles. Los rangos coinciden con `EffectParams::sanitized` (crates/mn-fx).
 import type { EffectParams, EffectSlot, EffectType } from './api'
+import { tr } from '../i18n'
 
 export const EFFECT_LABELS: Record<EffectType, string> = {
-  eq: 'Ecualizador',
-  compressor: 'Compresor',
-  reverb: 'Reverb',
-  delay: 'Delay',
-  limiter: 'Limitador',
+  eq: tr('Ecualizador'),
+  compressor: tr('Compresor'),
+  reverb: tr('Reverb'),
+  delay: tr('Delay'),
+  limiter: tr('Limitador'),
 }
 
 export const EFFECT_ORDER: EffectType[] = ['eq', 'compressor', 'delay', 'reverb', 'limiter']
@@ -63,38 +64,38 @@ const band = (name: string, label: string, lo: number, hi: number, withQ = true)
 
 export const CONTROLS: Record<EffectType, Control[]> = {
   eq: [
-    { path: 'highpass', label: 'Paso alto', min: 20, max: 1000, step: 1, unit: 'Hz', log: true, offAtZero: true },
-    ...band('low_shelf', 'Graves', 20, 1000, false),
-    ...band('mid1', 'Medios 1', 40, 16000),
-    ...band('mid2', 'Medios 2', 40, 16000),
-    ...band('high_shelf', 'Agudos', 1000, 20000, false),
-    { path: 'lowpass', label: 'Paso bajo', min: 1000, max: 20000, step: 10, unit: 'Hz', log: true, offAtZero: true },
+    { path: 'highpass', label: tr('Paso alto'), min: 20, max: 1000, step: 1, unit: 'Hz', log: true, offAtZero: true },
+    ...band('low_shelf', tr('Graves'), 20, 1000, false),
+    ...band('mid1', tr('Medios 1'), 40, 16000),
+    ...band('mid2', tr('Medios 2'), 40, 16000),
+    ...band('high_shelf', tr('Agudos'), 1000, 20000, false),
+    { path: 'lowpass', label: tr('Paso bajo'), min: 1000, max: 20000, step: 10, unit: 'Hz', log: true, offAtZero: true },
   ],
   compressor: [
-    { path: 'threshold_db', label: 'Umbral', min: -60, max: 0, step: 0.5, unit: 'dB' },
-    { path: 'ratio', label: 'Ratio', min: 1, max: 20, step: 0.1, unit: ':1', log: true },
-    { path: 'attack_ms', label: 'Ataque', min: 0.1, max: 200, step: 0.1, unit: 'ms', log: true },
-    { path: 'release_ms', label: 'Liberación', min: 5, max: 2000, step: 1, unit: 'ms', log: true },
-    { path: 'knee_db', label: 'Rodilla', min: 0, max: 24, step: 0.5, unit: 'dB' },
-    { path: 'makeup_db', label: 'Ganancia', min: 0, max: 24, step: 0.5, unit: 'dB' },
+    { path: 'threshold_db', label: tr('Umbral'), min: -60, max: 0, step: 0.5, unit: 'dB' },
+    { path: 'ratio', label: tr('Ratio'), min: 1, max: 20, step: 0.1, unit: ':1', log: true },
+    { path: 'attack_ms', label: tr('Ataque'), min: 0.1, max: 200, step: 0.1, unit: 'ms', log: true },
+    { path: 'release_ms', label: tr('Liberación'), min: 5, max: 2000, step: 1, unit: 'ms', log: true },
+    { path: 'knee_db', label: tr('Rodilla'), min: 0, max: 24, step: 0.5, unit: 'dB' },
+    { path: 'makeup_db', label: tr('Ganancia'), min: 0, max: 24, step: 0.5, unit: 'dB' },
   ],
   reverb: [
-    { path: 'room_size', label: 'Tamaño', min: 0, max: 1, step: 0.01, unit: '%', percent: true },
-    { path: 'damping', label: 'Amortiguación', min: 0, max: 1, step: 0.01, unit: '%', percent: true },
-    { path: 'width', label: 'Anchura', min: 0, max: 1, step: 0.01, unit: '%', percent: true },
+    { path: 'room_size', label: tr('Tamaño'), min: 0, max: 1, step: 0.01, unit: '%', percent: true },
+    { path: 'damping', label: tr('Amortiguación'), min: 0, max: 1, step: 0.01, unit: '%', percent: true },
+    { path: 'width', label: tr('Anchura'), min: 0, max: 1, step: 0.01, unit: '%', percent: true },
     { path: 'predelay_ms', label: 'Pre-retardo', min: 0, max: 200, step: 1, unit: 'ms' },
-    { path: 'mix', label: 'Mezcla', min: 0, max: 1, step: 0.01, unit: '%', percent: true },
+    { path: 'mix', label: tr('Mezcla'), min: 0, max: 1, step: 0.01, unit: '%', percent: true },
   ],
   delay: [
-    { path: 'time_ms', label: 'Tiempo', min: 1, max: 2000, step: 1, unit: 'ms', log: true },
-    { path: 'feedback', label: 'Realimentación', min: 0, max: 0.95, step: 0.01, unit: '%', percent: true },
-    { path: 'high_cut', label: 'Corte de agudos', min: 500, max: 20000, step: 10, unit: 'Hz', log: true },
-    { path: 'mix', label: 'Mezcla', min: 0, max: 1, step: 0.01, unit: '%', percent: true },
+    { path: 'time_ms', label: tr('Tiempo'), min: 1, max: 2000, step: 1, unit: 'ms', log: true },
+    { path: 'feedback', label: tr('Realimentación'), min: 0, max: 0.95, step: 0.01, unit: '%', percent: true },
+    { path: 'high_cut', label: tr('Corte de agudos'), min: 500, max: 20000, step: 10, unit: 'Hz', log: true },
+    { path: 'mix', label: tr('Mezcla'), min: 0, max: 1, step: 0.01, unit: '%', percent: true },
   ],
   limiter: [
-    { path: 'input_db', label: 'Entrada', min: 0, max: 24, step: 0.5, unit: 'dB' },
-    { path: 'ceiling_db', label: 'Techo', min: -12, max: 0, step: 0.1, unit: 'dBFS' },
-    { path: 'release_ms', label: 'Liberación', min: 5, max: 1000, step: 1, unit: 'ms', log: true },
+    { path: 'input_db', label: tr('Entrada'), min: 0, max: 24, step: 0.5, unit: 'dB' },
+    { path: 'ceiling_db', label: tr('Techo'), min: -12, max: 0, step: 0.1, unit: 'dBFS' },
+    { path: 'release_ms', label: tr('Liberación'), min: 5, max: 1000, step: 1, unit: 'ms', log: true },
   ],
 }
 

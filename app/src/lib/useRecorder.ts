@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, type InputChannels, type InputDeviceInfo, type InputInfo, type LatencyReport } from './api'
+import { tr } from '../i18n'
 
 /** Ajustes de grabación guardados en este equipo (no en el proyecto). */
 export interface RecorderPrefs {
@@ -85,7 +86,7 @@ export function useRecorder(onError: (m: string) => void): Recorder {
   useEffect(refreshDevices, [refreshDevices])
 
   const open = useCallback(async () => {
-    setBusy('Abriendo la entrada…')
+    setBusy(tr('Abriendo la entrada…'))
     try {
       const p = prefsRef.current
       const info = await api.inputOpen(p.device, p.channels)
@@ -115,7 +116,7 @@ export function useRecorder(onError: (m: string) => void): Recorder {
   )
 
   const calibrate = useCallback(async () => {
-    setBusy('Midiendo la latencia…')
+    setBusy(tr('Midiendo la latencia…'))
     try {
       const r = await api.recordCalibrate()
       setCalibration(r)

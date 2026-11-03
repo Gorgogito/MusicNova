@@ -1,15 +1,16 @@
 // Utilidades de letras: línea activa, edición conservando tiempos y desplazamientos.
 import type { LyricLine, LyricWord, Lyrics } from './api'
+import { tr } from '../i18n'
 
 /** Idiomas más habituales (Whisper admite 99; «auto» los detecta todos). */
 export const LANGUAGES: [string, string][] = [
-  ['es', 'Español'], ['en', 'Inglés'], ['pt', 'Portugués'], ['fr', 'Francés'], ['it', 'Italiano'],
-  ['de', 'Alemán'], ['ca', 'Catalán'], ['gl', 'Gallego'], ['eu', 'Euskera'], ['nl', 'Neerlandés'],
-  ['pl', 'Polaco'], ['ru', 'Ruso'], ['uk', 'Ucraniano'], ['ja', 'Japonés'], ['ko', 'Coreano'],
-  ['zh', 'Chino'], ['ar', 'Árabe'], ['hi', 'Hindi'], ['tr', 'Turco'], ['sv', 'Sueco'],
-  ['no', 'Noruego'], ['da', 'Danés'], ['fi', 'Finés'], ['el', 'Griego'], ['he', 'Hebreo'],
-  ['cs', 'Checo'], ['ro', 'Rumano'], ['hu', 'Húngaro'], ['id', 'Indonesio'], ['vi', 'Vietnamita'],
-  ['th', 'Tailandés'], ['la', 'Latín'],
+  ['es', tr('Español')], ['en', tr('Inglés')], ['pt', tr('Portugués')], ['fr', tr('Francés')], ['it', tr('Italiano')],
+  ['de', tr('Alemán')], ['ca', tr('Catalán')], ['gl', tr('Gallego')], ['eu', tr('Euskera')], ['nl', tr('Neerlandés')],
+  ['pl', tr('Polaco')], ['ru', tr('Ruso')], ['uk', tr('Ucraniano')], ['ja', tr('Japonés')], ['ko', tr('Coreano')],
+  ['zh', tr('Chino')], ['ar', tr('Árabe')], ['hi', tr('Hindi')], ['tr', tr('Turco')], ['sv', tr('Sueco')],
+  ['no', tr('Noruego')], ['da', tr('Danés')], ['fi', tr('Finés')], ['el', tr('Griego')], ['he', tr('Hebreo')],
+  ['cs', tr('Checo')], ['ro', tr('Rumano')], ['hu', tr('Húngaro')], ['id', tr('Indonesio')], ['vi', tr('Vietnamita')],
+  ['th', tr('Tailandés')], ['la', tr('Latín')],
 ]
 
 export const languageName = (code: string) => LANGUAGES.find(([c]) => c === code)?.[1] ?? code

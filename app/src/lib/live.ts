@@ -1,14 +1,16 @@
 // Tocar en vivo: teclado MIDI o del ordenador sobre la pista de instrumento armada.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type LiveStatus, type Note } from './api'
+import { lang } from '../i18n'
 
 /** Teclas del ordenador → semitonos sobre el Do de la octava actual (como en los DAW). */
 const KEYS: Record<string, number> = {
   KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7, KeyY: 8, KeyH: 9,
   KeyU: 10, KeyJ: 11, KeyK: 12, KeyO: 13, KeyL: 14, KeyP: 15, Semicolon: 16,
 }
-const NAMES = ['Do', 'Do♯', 'Re', 'Re♯', 'Mi', 'Fa', 'Fa♯', 'Sol', 'Sol♯', 'La', 'La♯', 'Si']
-export const noteName = (pitch: number) => `${NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`
+const NAMES_ES = ['Do', 'Do♯', 'Re', 'Re♯', 'Mi', 'Fa', 'Fa♯', 'Sol', 'Sol♯', 'La', 'La♯', 'Si']
+const NAMES_EN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B']
+export const noteName = (pitch: number) => `${(lang() === 'es' ? NAMES_ES : NAMES_EN)[pitch % 12]}${Math.floor(pitch / 12) - 1}`
 
 export interface LivePlay {
   status: LiveStatus | null

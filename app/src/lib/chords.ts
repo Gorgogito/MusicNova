@@ -1,3 +1,4 @@
+import { tr } from '../i18n'
 // Teoría de acordes para la interfaz: nombres, transposición y digitaciones.
 // Los tipos de acorde coinciden con los que reconoce el proceso de IA
 // (ai-worker/musicnova_ai/analysis/harmony.py): 7 con las plantillas y 14 con BTC.
@@ -66,7 +67,7 @@ export function chordName(root: number | null, quality: string | null, notation:
 
 export function keyName(tonic: number, mode: 'major' | 'minor', notation: Notation): string {
   const flats = prefersFlats(tonic, mode)
-  return `${noteName(tonic, notation, flats)} ${mode === 'minor' ? 'menor' : 'mayor'}`
+  return `${noteName(tonic, notation, flats)} ${mode === 'minor' ? tr('menor') : tr('mayor')}`
 }
 
 /** Notas (clases de altura) de un acorde. */

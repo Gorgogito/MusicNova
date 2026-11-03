@@ -3,6 +3,7 @@
 
 mod plugins;
 mod generate;
+mod i18n;
 mod instruments;
 mod live;
 mod transcribe;
@@ -284,7 +285,7 @@ fn plugin_slot_ids(project: &Project) -> Vec<String> {
 }
 
 fn plugin_errors(project: &Project) -> Vec<String> {
-    let channels = project.tracks.iter().map(|t| (t.name.as_str(), &t.effects)).chain(std::iter::once(("Máster", &project.master.effects)));
+    let channels = project.tracks.iter().map(|t| (t.name.clone(), &t.effects)).chain(std::iter::once((i18n::name("Máster"), &project.master.effects)));
     let mut out = Vec::new();
     for (name, effects) in channels {
         for s in effects {
@@ -445,7 +446,7 @@ async fn import_audio(app: AppHandle, path: String) -> Result<ProjectView, Strin
 
         let mut project = Project::new(name);
         project.source_path = Some(path);
-        project.tracks.push(TrackInfo::new("Mezcla original", TrackKind::Mix, rel));
+        project.tracks.push(TrackInfo::new(i18n::name("Mezcla original"), TrackKind::Mix, rel));
         project.save(&dir).map_err(err)?;
         load_into_engine(&state, dir, project)
     })
@@ -458,7 +459,7 @@ async fn import_audio(app: AppHandle, path: String) -> Result<ProjectView, Strin
 async fn create_project(app: AppHandle, name: String) -> Result<ProjectView, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let name = if name.trim().is_empty() { "Proyecto nuevo".to_string() } else { name.trim().to_string() };
+        let name = if name.trim().is_empty() { i18n::name("Proyecto nuevo") } else { name.trim().to_string() };
         let dir = unique_dir(&state.projects_root, &name);
         Project::create_dirs(&dir).map_err(err)?;
         let mut project = Project::new(name);
@@ -751,7 +752,7 @@ async fn separate_apply(app: AppHandle, stems: Vec<StemOutput>) -> Result<Projec
                 .map_err(|_| format!("el stem {} está fuera del proyecto", s.file))?
                 .to_string_lossy()
                 .replace('\\', "/");
-            project.tracks.push(TrackInfo::new(s.label, stem_kind(&s.name).0, rel));
+            project.tracks.push(TrackInfo::new(i18n::stem_name(&s.name, &s.label), stem_kind(&s.name).0, rel));
         }
         project.save(&dir).map_err(err)?;
         let view = load_into_engine(&state, dir, project)?;
@@ -1100,7 +1101,7 @@ async fn master_reference_apply(app: AppHandle, output: String, reference_name: 
             .replace('\\', "/");
         project.tracks.retain(|t| !t.file.starts_with(MASTER_DIR));
         let stem = Path::new(&reference_name).file_stem().and_then(|s| s.to_str()).unwrap_or("referencia");
-        let mut track = TrackInfo::new(format!("Máster · {stem}"), TrackKind::Generated, rel);
+        let mut track = TrackInfo::new(i18n::name_with("Máster · {}", &stem), TrackKind::Generated, rel);
         track.solo = true;
         project.tracks.push(track);
         project.save(&dir).map_err(err)?;
@@ -1402,7 +1403,7 @@ fn add_take(state: &AppState, take: mn_engine::Take) -> Result<RecordFinished, S
         .replace('\\', "/");
     let project = s.project.as_mut().ok_or("no hay ningún proyecto abierto")?;
     let n = project.tracks.iter().filter(|t| t.kind == TrackKind::Recording).count() + 1;
-    let mut info = TrackInfo::new(format!("Toma {n}"), TrackKind::Recording, rel);
+    let mut info = TrackInfo::new(i18n::name_with("Toma {}", &n.to_string()), TrackKind::Recording, rel);
     info.clips = vec![Clip::whole(take.offset_secs, duration)];
     let data = Arc::new(buf.data);
     let id = add_to_engine(engine, &info, data.clone(), rate)?;
@@ -1614,6 +1615,7 @@ pub fn run() {
             plugins::plugin_params,
             plugins::plugin_param_set,
             plugins::plugin_restart,
+            i18n::app_set_language,
             live::live_status,
             live::midi_open,
             live::live_arm,

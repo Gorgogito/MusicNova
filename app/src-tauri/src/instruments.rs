@@ -144,7 +144,7 @@ pub async fn instrument_track_add(app: AppHandle, name: String, source: Instrume
         let state = app.state::<AppState>();
         let drums = matches!(source, InstrumentSource::Synth { timbre: Timbre::Drums });
         let mode = if drums { DRUMS_MODE } else { "poly" }.to_string();
-        let name = if name.trim().is_empty() { "Instrumento".to_string() } else { name.trim().to_string() };
+        let name = if name.trim().is_empty() { crate::i18n::name("Instrumento") } else { name.trim().to_string() };
         add_tracks(&state, vec![(name, source, mode, Vec::new())])
     })
     .await
@@ -201,7 +201,14 @@ pub async fn midi_import(app: AppHandle, path: String) -> Result<ProjectView, St
             .map(|p| {
                 let timbre = timbre_for_program(p.program, p.drums);
                 let mode = if p.drums { DRUMS_MODE } else { "poly" }.to_string();
-                (p.name, InstrumentSource::Synth { timbre }, mode, p.notes)
+                {
+                    // Partes sin nombre en el archivo: «Batería» / «Canal N» en el idioma de la interfaz.
+                    let name = match p.name.strip_prefix("Canal ") {
+                        Some(n) => crate::i18n::name_with("Canal {}", n),
+                        None => crate::i18n::name(&p.name),
+                    };
+                    (name, InstrumentSource::Synth { timbre }, mode, p.notes)
+                }
             })
             .collect();
         add_tracks(&state, list)

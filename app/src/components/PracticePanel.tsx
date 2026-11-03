@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import type { PracticeSettings } from '../lib/api'
 import { formatTime } from '../lib/format'
 import { Icon } from './Icon'
+import { tr } from '../i18n'
 
 interface Props {
   practice: PracticeSettings
@@ -41,7 +42,7 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
   }
 
   const addMarker = () => {
-    const name = `Marcador ${p.markers.length + 1}`
+    const name = tr('Marcador {n}', { n: p.markers.length + 1 })
     onChange({ markers: [...p.markers, { id: crypto.randomUUID(), name, time: Math.min(position, duration) }] })
   }
 
@@ -49,7 +50,7 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
     <div className="practice">
       <section className="practice-group">
         <header>
-          <strong>Velocidad</strong>
+          <strong>{tr('Velocidad')}</strong>
           <span className="mono">{pct(p.tempo)}</span>
         </header>
         <div className="stepper">
@@ -64,20 +65,20 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
             value={p.tempo}
             onChange={(e) => onChange({ tempo: Number(e.target.value) })}
             onDoubleClick={() => onChange({ tempo: 1 })}
-            aria-label="Velocidad"
+            aria-label={tr('Velocidad')}
           />
           <button className="btn small" onClick={() => onChange({ tempo: Math.min(2, +(p.tempo + 0.05).toFixed(2)) })}>
             +5%
           </button>
         </div>
         <button className="link small" onClick={() => onChange({ tempo: 1 })} disabled={p.tempo === 1}>
-          Original
+          {tr('Original')}
         </button>
       </section>
 
       <section className="practice-group">
         <header>
-          <strong>Tono</strong>
+          <strong>{tr('Tono')}</strong>
           <span className="mono">{signed(p.pitch)} st</span>
         </header>
         <div className="stepper">
@@ -92,20 +93,20 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
             value={p.pitch}
             onChange={(e) => onChange({ pitch: Number(e.target.value) })}
             onDoubleClick={() => onChange({ pitch: 0 })}
-            aria-label="Tono en semitonos"
+            aria-label={tr('Tono en semitonos')}
           />
           <button className="btn small" onClick={() => onChange({ pitch: Math.min(12, p.pitch + 1) })}>
             +1
           </button>
         </div>
         <button className="link small" onClick={() => onChange({ pitch: 0 })} disabled={p.pitch === 0}>
-          Original
+          {tr('Original')}
         </button>
       </section>
 
       <section className="practice-group">
         <header>
-          <strong>Bucle A-B</strong>
+          <strong>{tr('Bucle A-B')}</strong>
           <label className="switch">
             <input
               type="checkbox"
@@ -117,22 +118,22 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
           </label>
         </header>
         <div className="stepper">
-          <button className="btn small" title="Inicio del bucle en la posición actual ([)" onClick={() => setLoopPoint('a')}>
+          <button className="btn small" title={tr('Inicio del bucle en la posición actual ([)')} onClick={() => setLoopPoint('a')}>
             A
           </button>
           <span className="mono small loop-range">
-            {p.loop_end > p.loop_start ? `${formatTime(p.loop_start)} – ${formatTime(p.loop_end)}` : 'sin bucle'}
+            {p.loop_end > p.loop_start ? `${formatTime(p.loop_start)} – ${formatTime(p.loop_end)}` : tr('sin bucle')}
           </span>
-          <button className="btn small" title="Fin del bucle en la posición actual (])" onClick={() => setLoopPoint('b')}>
+          <button className="btn small" title={tr('Fin del bucle en la posición actual (])')} onClick={() => setLoopPoint('b')}>
             B
           </button>
         </div>
-        <span className="small muted">También puedes arrastrar sobre la regla.</span>
+        <span className="small muted">{tr('También puedes arrastrar sobre la regla.')}</span>
       </section>
 
       <section className="practice-group">
         <header>
-          <strong>Metrónomo</strong>
+          <strong>{tr('Metrónomo')}</strong>
           <label className="switch">
             <input type="checkbox" checked={p.metronome} onChange={(e) => onChange({ metronome: e.target.checked })} />
             <span />
@@ -150,14 +151,14 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
             aria-label="BPM"
           />
           <span className="small muted">BPM</span>
-          <button className="btn small" onClick={tap} title="Pulsa al ritmo de la canción">
-            Tap
+          <button className="btn small" onClick={tap} title={tr('Pulsa al ritmo de la canción')}>
+            {tr('Tap')}
           </button>
           <select
             className="compact"
             value={p.beats_per_bar}
             onChange={(e) => onChange({ beats_per_bar: Number(e.target.value) })}
-            aria-label="Pulsos por compás"
+            aria-label={tr('Pulsos por compás')}
           >
             {[2, 3, 4, 5, 6, 7, 8, 12].map((n) => (
               <option key={n} value={n}>
@@ -167,8 +168,8 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
           </select>
         </div>
         <div className="stepper">
-          <button className="btn small" onClick={() => onChange({ beat_offset: position })} title="El tiempo 1 cae aquí">
-            Tiempo 1 aquí
+          <button className="btn small" onClick={() => onChange({ beat_offset: position })} title={tr('El tiempo 1 cae aquí')}>
+            {tr('Tiempo 1 aquí')}
           </button>
           <input
             type="range"
@@ -177,27 +178,27 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
             step={1}
             value={p.metronome_gain_db}
             onChange={(e) => onChange({ metronome_gain_db: Number(e.target.value) })}
-            aria-label="Volumen del metrónomo"
-            title={`Volumen ${p.metronome_gain_db} dB`}
+            aria-label={tr('Volumen del metrónomo')}
+            title={tr('Volumen {db} dB', { db: p.metronome_gain_db })}
           />
         </div>
         <label className="inline small">
-          Cuenta previa
+          {tr('Cuenta previa')}
           <select
             className="compact"
             value={p.count_in_bars}
             onChange={(e) => onChange({ count_in_bars: Number(e.target.value) })}
           >
             <option value={0}>No</option>
-            <option value={1}>1 compás</option>
-            <option value={2}>2 compases</option>
+            <option value={1}>{tr('1 compás')}</option>
+            <option value={2}>{tr('2 compases')}</option>
           </select>
         </label>
       </section>
 
       <section className="practice-group">
         <header>
-          <strong>Entrenador</strong>
+          <strong>{tr('Entrenador')}</strong>
           <label className="switch">
             <input
               type="checkbox"
@@ -214,7 +215,7 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
         </header>
         <div className="trainer-grid small">
           <label>
-            Desde
+            {tr('Desde')}
             <input
               className="num"
               type="number"
@@ -227,7 +228,7 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
             %
           </label>
           <label>
-            Hasta
+            {tr('Hasta')}
             <input
               className="num"
               type="number"
@@ -249,7 +250,7 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
               value={Math.round(p.trainer_step * 100)}
               onChange={(e) => onChange({ trainer_step: Number(e.target.value) / 100 })}
             />
-            % cada
+            {tr('% cada')}
             <input
               className="num"
               type="number"
@@ -261,18 +262,18 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
             vueltas
           </label>
         </div>
-        {!p.loop_enabled && <span className="small muted">Activa un bucle para usarlo.</span>}
+        {!p.loop_enabled && <span className="small muted">{tr('Activa un bucle para usarlo.')}</span>}
       </section>
 
       <section className="practice-group markers-group">
         <header>
-          <strong>Marcadores</strong>
-          <button className="btn small" onClick={addMarker} title="Añadir en la posición actual (M)">
-            <Icon name="plus" size={14} /> Añadir
+          <strong>{tr('Marcadores')}</strong>
+          <button className="btn small" onClick={addMarker} title={tr('Añadir en la posición actual (M)')}>
+            <Icon name="plus" size={14} /> {tr('Añadir')}
           </button>
         </header>
         <div className="marker-list">
-          {p.markers.length === 0 && <span className="small muted">Pulsa M para marcar la posición actual.</span>}
+          {p.markers.length === 0 && <span className="small muted">{tr('Pulsa M para marcar la posición actual.')}</span>}
           {p.markers.map((m) => (
             <div key={m.id} className="marker-chip">
               {editing === m.id ? (
@@ -294,7 +295,7 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
               )}
               <button
                 className="marker-del"
-                title="Eliminar"
+                title={tr('Eliminar')}
                 onClick={() => onChange({ markers: p.markers.filter((x) => x.id !== m.id) })}
               >
                 <Icon name="x" size={12} />

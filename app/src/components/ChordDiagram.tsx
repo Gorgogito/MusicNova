@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
 import { chordNotes, guitarShape, mod12 } from '../lib/chords'
+import { tr } from '../i18n'
 
 interface Props {
   root: number
@@ -32,7 +33,7 @@ function Guitar({ root, quality }: { root: number; quality: string }) {
   // Cejilla: cuerdas pisadas en el traste de la cejilla desde la más grave hasta la 1.ª.
   const barreStrings = shape.barre > 0 ? shape.frets.map((f, i) => (f === shape.barre ? i : -1)).filter((i) => i >= 0) : []
   return (
-    <svg className="chord-diagram" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Diagrama de guitarra">
+    <svg className="chord-diagram" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={tr('Diagrama de guitarra')}>
       {start === 1 ? (
         <rect x={x(0)} y={top - 3} width={x(5) - x(0)} height={3} className="nut" />
       ) : (
@@ -114,7 +115,7 @@ function Piano({ root, quality }: { root: number; quality: string }) {
     }
   }
   return (
-    <svg className="chord-diagram piano" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Diagrama de piano">
+    <svg className="chord-diagram piano" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={tr('Diagrama de piano')}>
       {whites}
       {blacks}
     </svg>

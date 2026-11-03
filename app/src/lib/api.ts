@@ -1,6 +1,7 @@
 // Capa tipada sobre los comandos y eventos de Tauri.
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { trBackend } from '../i18n'
 
 export type TrackKind =
   | 'mix' | 'vocals' | 'backing_vocals' | 'drums' | 'bass' | 'guitar'
@@ -627,19 +628,19 @@ export const events = {
   transport: (cb: (e: TransportEvent) => void): Promise<UnlistenFn> =>
     listen<TransportEvent>('transport', (e) => cb(e.payload)),
   worker: (cb: (e: WorkerEvent) => void): Promise<UnlistenFn> =>
-    listen<WorkerEvent>('worker-event', (e) => cb(e.payload)),
+    listen<WorkerEvent>('worker-event', (e) => cb(localizeEvent(e.payload))),
   workerStatus: (cb: (s: WorkerStatus) => void): Promise<UnlistenFn> =>
-    listen<WorkerStatus>('worker-status', (e) => cb(e.payload)),
+    listen<WorkerStatus>('worker-status', (e) => cb({ ...e.payload, error: e.payload.error && trBackend(e.payload.error) })),
   pluginScan: (cb: (p: { done: number; total: number; current: string }) => void): Promise<UnlistenFn> =>
     listen<{ done: number; total: number; current: string }>('plugin-scan', (e) => cb(e.payload)),
   recordFinished: (cb: (r: RecordFinished) => void): Promise<UnlistenFn> =>
-    listen<RecordFinished>('record-finished', (e) => cb(e.payload)),
+    listen<RecordFinished>('record-finished', (e) => cb({ ...e.payload, message: e.payload.message && trBackend(e.payload.message) })),
   /** El usuario cerró la ventana de un plugin (id del efecto o `inst:<pista>`). */
   pluginEditorClosed: (cb: (slotId: string) => void): Promise<UnlistenFn> =>
     listen<string>('plugin-editor-closed', (e) => cb(e.payload)),
   /** El plugin de un efecto se cayó o dejó de responder (su proceso terminó). */
   pluginFailed: (cb: (e: { slot_id: string; message: string }) => void): Promise<UnlistenFn> =>
-    listen<{ slot_id: string; message: string }>('plugin-failed', (e) => cb(e.payload)),
+    listen<{ slot_id: string; message: string }>('plugin-failed', (e) => cb({ ...e.payload, message: trBackend(e.payload.message) })),
 }
 
 /** Final de la línea de tiempo: el clip que acaba más tarde. */
@@ -650,6 +651,17 @@ export function timelineEnd(tracks: { clips: Clip[]; offset: number; duration: n
   )
 }
 
+/** Mensaje de error para mostrar (los del backend se traducen al idioma de la interfaz). */
 export function errorMessage(e: unknown): string {
-  return typeof e === 'string' ? e : e instanceof Error ? e.message : JSON.stringify(e)
+  return trBackend(typeof e === 'string' ? e : e instanceof Error ? e.message : JSON.stringify(e))
+}
+
+/** Progreso y errores de los trabajos del proceso de IA, traducidos. */
+function localizeEvent<T>(ev: T): T {
+  const d = (ev as { data?: Record<string, unknown> }).data
+  if (!d || typeof d !== 'object') return ev
+  const data = { ...d }
+  if (typeof data.message === 'string') data.message = trBackend(data.message)
+  if (typeof data.error === 'string') data.error = trBackend(data.error)
+  return { ...ev, data }
 }

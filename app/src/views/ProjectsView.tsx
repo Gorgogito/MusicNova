@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { api, errorMessage, type AppInfo, type ProjectSummary } from '../lib/api'
 import { formatDate } from '../lib/format'
 import { Icon } from '../components/Icon'
+import { tr, plural } from '../i18n'
 
 interface Props {
   info: AppInfo | null
@@ -25,7 +26,7 @@ export function ProjectsView({ info, busy, onImport, onCreate, onOpen, onError }
     const path = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: 'Audio', extensions: info?.supported_extensions ?? ['wav', 'mp3', 'flac'] }],
+      filters: [{ name: tr('Audio'), extensions: info?.supported_extensions ?? ['wav', 'mp3', 'flac'] }],
     })
     if (typeof path === 'string') onImport(path)
   }
@@ -34,16 +35,16 @@ export function ProjectsView({ info, busy, onImport, onCreate, onOpen, onError }
     <section className="projects">
       <header className="view-header">
         <div>
-          <h1>Proyectos</h1>
-          <p className="muted">Importa una canción o empieza un proyecto vacío para grabar. Todo se procesa en tu equipo.</p>
+          <h1>{tr('Proyectos')}</h1>
+          <p className="muted">{tr('Importa una canción o empieza un proyecto vacío para grabar. Todo se procesa en tu equipo.')}</p>
         </div>
       </header>
 
       <button className="dropzone" onClick={pickFile} disabled={!!busy}>
         <Icon name="music" size={36} />
-        <strong>{busy ?? 'Importar audio o vídeo'}</strong>
+        <strong>{busy ?? tr('Importar audio o vídeo')}</strong>
         <span className="muted">
-          Haz clic o arrastra un archivo aquí ·{' '}
+          {tr('Haz clic o arrastra un archivo aquí')} ·{' '}
           {(info?.supported_extensions ?? []).filter((e) => !['wave', 'oga'].includes(e)).join(', ').toUpperCase()}
         </span>
       </button>
@@ -58,27 +59,26 @@ export function ProjectsView({ info, busy, onImport, onCreate, onOpen, onError }
       >
         <input
           type="text"
-          placeholder="Nombre del proyecto nuevo"
+          placeholder={tr('Nombre del proyecto nuevo')}
           value={name}
           maxLength={80}
           onChange={(e) => setName(e.target.value)}
           disabled={!!busy}
         />
         <button className="btn" type="submit" disabled={!!busy}>
-          <Icon name="mic" size={16} /> Proyecto vacío
+          <Icon name="mic" size={16} /> {tr('Proyecto vacío')}
         </button>
       </form>
 
       {info && !info.ffmpeg_available && (
         <p className="small muted">
-          Para importar vídeo (MOV, AVI…) y formatos como Opus o WMA, instala FFmpeg desde «Modelos IA» →
-          Herramientas.
+          {tr('Para importar vídeo (MOV, AVI…) y formatos como Opus o WMA, instala FFmpeg desde «Modelos IA» → Herramientas.')}
         </p>
       )}
 
-      <h2>Recientes</h2>
+      <h2>{tr('Recientes')}</h2>
       {projects.length === 0 ? (
-        <p className="muted">Aún no hay proyectos en {info?.projects_root ?? 'la carpeta de música'}.</p>
+        <p className="muted">{tr('Aún no hay proyectos en')} {info?.projects_root ?? tr('la carpeta de música')}.</p>
       ) : (
         <ul className="project-list">
           {projects.map((p) => (
@@ -87,7 +87,7 @@ export function ProjectsView({ info, busy, onImport, onCreate, onOpen, onError }
                 <Icon name="folder" />
                 <span className="project-name">{p.name}</span>
                 <span className="muted small">
-                  {p.tracks} {p.tracks === 1 ? 'pista' : 'pistas'}
+                  {plural(p.tracks, '{n} pista', '{n} pistas')}
                 </span>
                 <span className="muted small">{formatDate(p.modified)}</span>
               </button>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type Analysis, type PracticeSettings } from './api'
+import { tr } from '../i18n'
 
 export interface AnalysisJob {
   jobId: string | null
@@ -38,7 +39,7 @@ export function useAnalysis(
             .finally(() => setJob(null))
           break
         case 'job.failed':
-          onError(`El análisis falló: ${ev.data.error}`)
+          onError(tr('El análisis falló: {error}', { error: ev.data.error }))
           setJob(null)
           break
         case 'job.cancelled':
@@ -53,7 +54,7 @@ export function useAnalysis(
 
   const start = useCallback(
     async (device: string, beatModelId?: string) => {
-      setJob({ jobId: null, progress: 0, message: 'preparando audio…' })
+      setJob({ jobId: null, progress: 0, message: tr('preparando audio…') })
       try {
         const { job_id } = await api.analyzeStart(device, beatModelId)
         setJob((j) => j && { ...j, jobId: job_id })

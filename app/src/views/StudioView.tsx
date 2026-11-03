@@ -50,6 +50,7 @@ import { MasterPanel } from '../components/MasterPanel'
 import type { MasterJob } from '../lib/useMasterReference'
 import { usePref } from '../lib/prefs'
 import type { Notation } from '../lib/chords'
+import { tr, plural } from '../i18n'
 
 interface Props {
   project: ProjectView
@@ -475,7 +476,7 @@ export function StudioView({
                   ))}
                 </select>
                 <div className="lane-buttons">
-                  <label className="check small" title="Activar o desactivar esta curva">
+                  <label className="check small" title={tr('Activar o desactivar esta curva')}>
                     <input
                       type="checkbox"
                       checked={lane.enabled}
@@ -485,7 +486,7 @@ export function StudioView({
                   </label>
                   <button
                     className="icon-btn small"
-                    title="Borrar todos los puntos"
+                    title={tr('Borrar todos los puntos')}
                     disabled={recording || lane.points.length === 0}
                     onClick={() => commitLanes(trackId, lanes, replace({ ...lane, points: [] }))}
                   >
@@ -493,7 +494,7 @@ export function StudioView({
                   </button>
                   <button
                     className="icon-btn small"
-                    title="Quitar el carril"
+                    title={tr('Quitar el carril')}
                     disabled={recording}
                     onClick={() => commitLanes(trackId, lanes, lanes.filter((l) => l.id !== lane.id))}
                   >
@@ -531,7 +532,7 @@ export function StudioView({
                 if (lane) commitLanes(trackId, lanes, [...lanes, lane])
               }}
             >
-              + Carril de automatización
+              {tr('+ Carril de automatización')}
             </button>
           </div>
           <div className="auto-hint small muted">
@@ -607,11 +608,11 @@ export function StudioView({
     t.kind === 'instrument' ||
     (t.kind === 'generated' && ['audio/midi/', 'audio/tuned/', 'audio/denoised/', 'audio/generated/'].some((d) => t.file.startsWith(d)))
   const removeTrack = async (t: TrackView) => {
-    const ok = await ask(`¿Eliminar «${t.name}»? Su audio se borrará del proyecto.`, {
-      title: 'Eliminar pista',
+    const ok = await ask(tr('¿Eliminar «{name}»? Su audio se borrará del proyecto.', { name: t.name }), {
+      title: tr('Eliminar pista'),
       kind: 'warning',
-      okLabel: 'Eliminar',
-      cancelLabel: 'Cancelar',
+      okLabel: tr('Eliminar'),
+      cancelLabel: tr('Cancelar'),
     })
     if (!ok) return
     api
@@ -676,7 +677,7 @@ export function StudioView({
         <div>
           <h1>{project.project.name}</h1>
           <p className="muted">
-            {project.tracks.length} {project.tracks.length === 1 ? 'pista' : 'pistas'} · {formatTime(tracksEnd)} ·{' '}
+            {plural(project.tracks.length, '{n} pista', '{n} pistas')} · {formatTime(tracksEnd)} ·{' '}
             {project.sample_rate / 1000} kHz
           </p>
         </div>
@@ -685,69 +686,69 @@ export function StudioView({
             className={`btn ${shownPanel === 'record' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'record' ? null : 'record')}
           >
-            <Icon name="mic" size={16} /> Grabar
+            <Icon name="mic" size={16} /> {tr('Grabar')}
           </button>
           <button
             className={`btn ${shownPanel === 'separate' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'separate' ? null : 'separate')}
           >
-            <Icon name="model" size={16} /> {hasStems ? 'Volver a separar' : 'Separar stems'}
+            <Icon name="model" size={16} /> {hasStems ? tr('Volver a separar') : tr('Separar stems')}
           </button>
           <button
             className={`btn ${shownPanel === 'analysis' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'analysis' ? null : 'analysis')}
           >
-            <Icon name="chord" size={16} /> Análisis
+            <Icon name="chord" size={16} /> {tr('Análisis')}
           </button>
           <button
             className={`btn ${shownPanel === 'transcription' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'transcription' ? null : 'transcription')}
           >
-            <Icon name="piano" size={16} /> Transcripción
+            <Icon name="piano" size={16} /> {tr('Transcripción')}
           </button>
           <button
             className={`btn ${shownPanel === 'instruments' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'instruments' ? null : 'instruments')}
-            title="Pistas de instrumento: notas MIDI con sintetizador o plugin"
+            title={tr('Pistas de instrumento: notas MIDI con sintetizador o plugin')}
           >
-            <Icon name="music" size={16} /> Instrumentos
+            <Icon name="music" size={16} /> {tr('Instrumentos')}
           </button>
           <button
             className={`btn ${shownPanel === 'generate' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'generate' ? null : 'generate')}
-            title="Limpiar ruido y generar acompañamientos con IA"
+            title={tr('Limpiar ruido y generar acompañamientos con IA')}
           >
-            <Icon name="sparkle" size={16} /> IA generativa
+            <Icon name="sparkle" size={16} /> {tr('IA generativa')}
           </button>
           <button
             className={`btn ${shownPanel === 'lyrics' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'lyrics' ? null : 'lyrics')}
           >
-            <Icon name="lyrics" size={16} /> Letra
+            <Icon name="lyrics" size={16} /> {tr('Letra')}
           </button>
           <button
             className={`btn ${shownPanel === 'mix' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'mix' ? null : 'mix')}
           >
-            <Icon name="sliders" size={16} /> Mezcla
+            <Icon name="sliders" size={16} /> {tr('Mezcla')}
           </button>
           <button
             className={`btn ${shownPanel === 'master' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'master' ? null : 'master')}
           >
-            <Icon name="star" size={16} /> Máster
+            <Icon name="star" size={16} /> {tr('Máster')}
           </button>
           <button
             className={`btn ${shownPanel === 'practice' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'practice' ? null : 'practice')}
           >
-            <Icon name="music" size={16} /> Práctica
+            <Icon name="music" size={16} /> {tr('Práctica')}
           </button>
           <button
             className={`btn ${shownPanel === 'export' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'export' ? null : 'export')}
           >
-            <Icon name="download" size={16} /> Exportar
+            <Icon name="download" size={16} /> {tr('Exportar')}
           </button>
         </div>
       </header>
@@ -878,29 +879,29 @@ export function StudioView({
       )}
 
       <div className="edit-bar">
-        <button className="btn ghost small" onClick={undo} disabled={history.undo === 0 || recording} title="Deshacer (Ctrl+Z)">
-          <Icon name="undo" size={15} /> Deshacer
+        <button className="btn ghost small" onClick={undo} disabled={history.undo === 0 || recording} title={tr('Deshacer (Ctrl+Z)')}>
+          <Icon name="undo" size={15} /> {tr('Deshacer')}
         </button>
-        <button className="btn ghost small" onClick={redo} disabled={history.redo === 0 || recording} title="Rehacer (Ctrl+Mayús+Z)">
-          <Icon name="redo" size={15} /> Rehacer
+        <button className="btn ghost small" onClick={redo} disabled={history.redo === 0 || recording} title={tr('Rehacer (Ctrl+Mayús+Z)')}>
+          <Icon name="redo" size={15} /> {tr('Rehacer')}
         </button>
         <button
           className="btn ghost small"
           onClick={splitAtPlayhead}
           disabled={recording}
-          title="Dividir en el cabezal el clip seleccionado o, sin selección, todos los clips bajo el cabezal (S)"
+          title={tr('Dividir en el cabezal el clip seleccionado o, sin selección, todos los clips bajo el cabezal (S)')}
         >
-          <Icon name="scissors" size={15} /> Dividir
+          <Icon name="scissors" size={15} /> {tr('Dividir')}
         </button>
-        <button className="btn ghost small" onClick={deleteSelected} disabled={!selectedTrack || recording} title="Eliminar el clip seleccionado (Supr)">
-          <Icon name="trash" size={15} /> Eliminar clip
+        <button className="btn ghost small" onClick={deleteSelected} disabled={!selectedTrack || recording} title={tr('Eliminar el clip seleccionado (Supr)')}>
+          <Icon name="trash" size={15} /> {tr('Eliminar clip')}
         </button>
-        <label className="check small" title="Al mover o recortar, los bordes se pegan a los pulsos (mantén Alt para moverlos libremente)">
+        <label className="check small" title={tr('Al mover o recortar, los bordes se pegan a los pulsos (mantén Alt para moverlos libremente)')}>
           <input type="checkbox" checked={snapOn === 'on'} onChange={(e) => setSnapOn(e.target.checked ? 'on' : 'off')} />
-          Ajustar a pulsos
+          {tr('Ajustar a pulsos')}
         </label>
         <div className="zoom">
-          <button className="icon-btn small" onClick={() => setZoom(zoom / 1.5)} disabled={zoom <= 1} title="Alejar">
+          <button className="icon-btn small" onClick={() => setZoom(zoom / 1.5)} disabled={zoom <= 1} title={tr('Alejar')}>
             −
           </button>
           <input
@@ -910,10 +911,10 @@ export function StudioView({
             step={0.05}
             value={Math.log2(zoom)}
             onChange={(e) => setZoom(2 ** Number(e.target.value))}
-            aria-label="Zoom"
-            title="Zoom (Ctrl + rueda)"
+            aria-label={tr('Zoom')}
+            title={tr('Zoom (Ctrl + rueda)')}
           />
-          <button className="icon-btn small" onClick={() => setZoom(zoom * 1.5)} disabled={zoom >= MAX_ZOOM} title="Acercar">
+          <button className="icon-btn small" onClick={() => setZoom(zoom * 1.5)} disabled={zoom >= MAX_ZOOM} title={tr('Acercar')}>
             +
           </button>
           <span className="small mono muted">{zoom < 10 ? zoom.toFixed(1) : Math.round(zoom)}×</span>
@@ -971,28 +972,28 @@ export function StudioView({
                 <div className="lane-buttons">
                   <button
                     className={`toggle mute ${t.mute ? 'on' : ''}`}
-                    title="Silenciar (M)"
+                    title={tr('Silenciar (M)')}
                     onClick={() => update(t, { mute: !t.mute })}
                   >
                     M
                   </button>
                   <button
                     className={`toggle solo ${t.solo ? 'on' : ''}`}
-                    title="Solo (S)"
+                    title={tr('Solo (S)')}
                     onClick={() => update(t, { solo: !t.solo })}
                   >
                     S
                   </button>
                   <button
                     className={`toggle fx ${t.effects.some((e) => e.enabled) ? 'on' : ''}`}
-                    title={t.effects.length ? `Efectos: ${t.effects.length}` : 'Añadir efectos'}
+                    title={t.effects.length ? tr('Efectos: {n}', { n: t.effects.length }) : tr('Añadir efectos')}
                     onClick={() => openFx(t.id)}
                   >
                     FX
                   </button>
                   <button
                     className={`toggle auto ${expanded.has(t.id) ? 'open' : ''} ${t.automation.some((l) => l.enabled && l.points.length) ? 'on' : ''}`}
-                    title={`Automatización${t.automation.length ? `: ${t.automation.length} ${t.automation.length === 1 ? 'curva' : 'curvas'}` : ''}`}
+                    title={t.automation.length ? plural(t.automation.length, 'Automatización: {n} curva', 'Automatización: {n} curvas') : tr('Automatización')}
                     onClick={() => toggleExpanded(t.id)}
                   >
                     A
@@ -1000,7 +1001,7 @@ export function StudioView({
                   {(trackNotes(t.id) || pitchFor(t.id)) && (
                     <button
                       className={`toggle notes ${shownNotes.has(t.id) ? 'open on' : ''}`}
-                      title={shownNotes.has(t.id) ? 'Ocultar el piano roll' : 'Ver el piano roll (notas transcritas y curva de tono)'}
+                      title={shownNotes.has(t.id) ? tr('Ocultar el piano roll') : tr('Ver el piano roll (notas transcritas y curva de tono)')}
                       onClick={() => toggleNotes(t.id)}
                     >
                       N
@@ -1009,7 +1010,7 @@ export function StudioView({
                   {removable(t) && (
                     <button
                       className="icon-btn lane-remove"
-                      title="Eliminar la pista"
+                      title={tr('Eliminar la pista')}
                       disabled={recording}
                       onClick={() => removeTrack(t)}
                     >
@@ -1019,9 +1020,9 @@ export function StudioView({
                 </div>
                 <label
                   className={`lane-slider ${volAuto ? 'automated' : ''}`}
-                  title={volAuto ? 'Volumen controlado por la automatización' : `Volumen: ${t.gain_db.toFixed(1)} dB (doble clic: 0 dB)`}
+                  title={volAuto ? tr('Volumen controlado por la automatización') : tr('Volumen: {db} dB (doble clic: 0 dB)', { db: t.gain_db.toFixed(1) })}
                 >
-                  <span className="small muted">Vol</span>
+                  <span className="small muted">{tr('Vol')}</span>
                   <input
                     disabled={volAuto}
                     type="range"
@@ -1036,9 +1037,9 @@ export function StudioView({
                 </label>
                 <label
                   className={`lane-slider ${panAuto ? 'automated' : ''}`}
-                  title={panAuto ? 'Panorama controlado por la automatización' : 'Panorama (doble clic: centro)'}
+                  title={panAuto ? tr('Panorama controlado por la automatización') : tr('Panorama (doble clic: centro)')}
                 >
-                  <span className="small muted">Pan</span>
+                  <span className="small muted">{tr('Pan')}</span>
                   <input
                     disabled={panAuto}
                     type="range"
@@ -1081,10 +1082,10 @@ export function StudioView({
                 <div className="lane-header auto-header">
                   <span className="lane-chip" style={{ background: kind.color }} />
                   <span className="small">
-                    {trackNotes(t.id) ? `Notas · ${trackNotes(t.id)!.notes.length}` : 'Curva de tono'}
-                    {pitchFor(t.id) && trackNotes(t.id) ? ' · curva de tono' : ''}
+                    {trackNotes(t.id) ? tr('Notas · {n}', { n: trackNotes(t.id)!.notes.length }) : tr('Curva de tono')}
+                    {pitchFor(t.id) && trackNotes(t.id) ? tr(' · curva de tono') : ''}
                   </span>
-                  <button className="icon-btn" title="Ocultar" onClick={() => toggleNotes(t.id)}>
+                  <button className="icon-btn" title={tr('Ocultar')} onClick={() => toggleNotes(t.id)}>
                     <Icon name="x" size={14} />
                   </button>
                 </div>
@@ -1109,10 +1110,10 @@ export function StudioView({
 
         <div className="lane master-lane">
           <div className="lane-header compact-header">
-            <strong>Máster</strong>
+            <strong>{tr('Máster')}</strong>
             <button
               className={`toggle auto ${expanded.has(MASTER_KEY) ? 'open' : ''} ${master.automation.some((l) => l.enabled && l.points.length) ? 'on' : ''}`}
-              title="Automatización del máster (volumen y efectos del bus)"
+              title={tr('Automatización del máster (volumen y efectos del bus)')}
               onClick={() => toggleExpanded(MASTER_KEY)}
             >
               A
@@ -1149,9 +1150,7 @@ export function StudioView({
       </div>
 
       <p className="hint muted small">
-        Clic: saltar a esa posición. Arrastra un clip para moverlo, sus bordes para recortarlo y los tiradores de
-        arriba para los fundidos. S divide en el cabezal, Supr borra el clip, Ctrl+Z deshace. Alt desactiva el ajuste a
-        pulsos.
+        {tr('Clic: saltar a esa posición. Arrastra un clip para moverlo, sus bordes para recortarlo y los tiradores de arriba para los fundidos. S divide en el cabezal, Supr borra el clip, Ctrl+Z deshace. Alt desactiva el ajuste a pulsos.')}
       </p>
     </section>
   )

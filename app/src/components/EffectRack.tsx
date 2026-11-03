@@ -13,6 +13,7 @@ import {
 import { Icon } from './Icon'
 import { PluginControls } from './PluginControls'
 import { FORMAT_LABEL, pluginSlot, usePlugins } from '../lib/plugins'
+import { tr } from '../i18n'
 
 interface Props {
   effects: EffectSlot[]
@@ -35,7 +36,7 @@ export function EffectRack({ effects, onChange, sidechainSources = [] }: Props) 
 
   return (
     <div className="rack">
-      {effects.length === 0 && <span className="small muted">Sin efectos. Añade uno para empezar.</span>}
+      {effects.length === 0 && <span className="small muted">{tr('Sin efectos. Añade uno para empezar.')}</span>}
       {effects.map((slot, i) => {
         const type = slot.params.type
         const plugin = type === 'plugin' ? slot.plugin : undefined
@@ -44,26 +45,26 @@ export function EffectRack({ effects, onChange, sidechainSources = [] }: Props) 
         return (
           <section key={slot.id} className={`fx ${slot.enabled ? '' : 'off'}`}>
             <header>
-              <label className="switch" title={slot.enabled ? 'Desactivar' : 'Activar'}>
+              <label className="switch" title={slot.enabled ? tr('Desactivar') : tr('Activar')}>
                 <input type="checkbox" checked={slot.enabled} onChange={(e) => update(i, { ...slot, enabled: e.target.checked })} />
                 <span />
               </label>
               {type === 'plugin' ? (
                 <strong className="ellipsis" title={plugin ? `${plugin.name} · ${plugin.vendor}
 ${plugin.path}` : ''}>
-                  {plugin?.name ?? 'Plugin'} <span className="badge">{plugin ? FORMAT_LABEL[plugin.format] : '?'}</span>
+                  {plugin?.name ?? tr('Plugin')} <span className="badge">{plugin ? FORMAT_LABEL[plugin.format] : '?'}</span>
                 </strong>
               ) : (
                 <strong>{EFFECT_LABELS[type]}</strong>
               )}
               <div className="fx-actions">
-                <button className="icon-btn" title="Subir" disabled={i === 0} onClick={() => move(i, -1)}>
+                <button className="icon-btn" title={tr('Subir')} disabled={i === 0} onClick={() => move(i, -1)}>
                   ↑
                 </button>
-                <button className="icon-btn" title="Bajar" disabled={i === effects.length - 1} onClick={() => move(i, 1)}>
+                <button className="icon-btn" title={tr('Bajar')} disabled={i === effects.length - 1} onClick={() => move(i, 1)}>
                   ↓
                 </button>
-                <button className="icon-btn" title="Quitar" onClick={() => onChange(effects.filter((_, j) => j !== i))}>
+                <button className="icon-btn" title={tr('Quitar')} onClick={() => onChange(effects.filter((_, j) => j !== i))}>
                   <Icon name="trash" size={14} />
                 </button>
               </div>
@@ -101,14 +102,14 @@ ${plugin.path}` : ''}>
               {type === 'compressor' && sidechainSources.length > 0 && (
                 <label
                   className="field small"
-                  title="El compresor reacciona al nivel de otra pista (p. ej. el bombo hace «respirar» al bajo o a un pad). Funciona aunque esa pista esté silenciada"
+                  title={tr('El compresor reacciona al nivel de otra pista (p. ej. el bombo hace «respirar» al bajo o a un pad). Funciona aunque esa pista esté silenciada')}
                 >
-                  <span className="small muted">Sidechain</span>
+                  <span className="small muted">{tr('Sidechain')}</span>
                   <select
                     value={slot.sidechain ?? ''}
                     onChange={(e) => update(i, { ...slot, sidechain: e.target.value || null })}
                   >
-                    <option value="">Ninguno (su propia señal)</option>
+                    <option value="">{tr('Ninguno (su propia señal)')}</option>
                     {sidechainSources.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.name}
@@ -118,7 +119,7 @@ ${plugin.path}` : ''}>
                 </label>
               )}
               {limiter && (
-                <label className="inline small" title="Limita también los picos entre muestras (lo que miden las plataformas en dBTP)">
+                <label className="inline small" title={tr('Limita también los picos entre muestras (lo que miden las plataformas en dBTP)')}>
                   <input
                     type="checkbox"
                     checked={limiter.true_peak}
@@ -143,10 +144,10 @@ ${plugin.path}` : ''}>
             if (d) onChange([...effects, pluginSlot(d)])
           } else onChange([...effects, newSlot(v as EffectType)])
         }}
-        aria-label="Añadir efecto"
+        aria-label={tr('Añadir efecto')}
         disabled={effects.length >= 16}
       >
-        <option value="">+ Añadir efecto…</option>
+        <option value="">{tr('+ Añadir efecto…')}</option>
         <optgroup label="MusicNova">
           {EFFECT_ORDER.map((t) => (
             <option key={t} value={t}>
@@ -155,7 +156,7 @@ ${plugin.path}` : ''}>
           ))}
         </optgroup>
         {plugins.length > 0 ? (
-          <optgroup label="Plugins">
+          <optgroup label={tr('Plugins')}>
             {plugins.map((d, k) => (
               <option key={`${d.format}:${d.path}:${d.id}`} value={`plugin:${k}`}>
                 {d.name} · {d.vendor} ({FORMAT_LABEL[d.format]})
@@ -163,7 +164,7 @@ ${plugin.path}` : ''}>
             ))}
           </optgroup>
         ) : (
-          <option disabled>Plugins: escanéalos en «Sistema»</option>
+          <option disabled>{tr('Plugins: escanéalos en «Sistema»')}</option>
         )}
       </select>
     </div>

@@ -310,7 +310,7 @@ pub async fn tune_render(app: AppHandle, settings: TuneSettings) -> Result<Proje
         let path = dir.join(&rel);
         std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
         export_audio(&path, &tuned, ExportFormat::Flac24).map_err(err)?;
-        add_generated_track(&state, rel, format!("{} · afinada", info.name), Some(track_id))
+        add_generated_track(&state, rel, crate::i18n::name_with("{} · afinada", &info.name), Some(track_id))
     })
     .await
     .map_err(err)?

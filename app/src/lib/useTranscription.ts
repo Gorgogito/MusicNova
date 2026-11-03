@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type InstrumentReport, type NotesMode, type PitchCurve, type PitchEngine, type Transcription } from './api'
+import { tr } from '../i18n'
 
 export type TranscriptionKind = 'notes' | 'pitch' | 'instruments'
 
@@ -12,9 +13,9 @@ export interface TranscriptionJob {
 }
 
 export const JOB_LABEL: Record<TranscriptionKind, string> = {
-  notes: 'Transcribiendo notas',
-  pitch: 'Analizando la afinación',
-  instruments: 'Detectando instrumentos',
+  notes: tr('Transcribiendo notas'),
+  pitch: tr('Analizando la afinación'),
+  instruments: tr('Detectando instrumentos'),
 }
 
 export interface TranscriptionHandlers {
@@ -53,7 +54,7 @@ export function useTranscription(handlers: TranscriptionHandlers, onError: (m: s
           break
         }
         case 'job.failed':
-          onError(`${JOB_LABEL[current.kind]}: falló (${ev.data.error})`)
+          onError(tr('{task}: falló ({error})', { task: JOB_LABEL[current.kind], error: ev.data.error }))
           setJob(null)
           break
         case 'job.cancelled':
@@ -69,10 +70,10 @@ export function useTranscription(handlers: TranscriptionHandlers, onError: (m: s
   const run = useCallback(
     async (kind: TranscriptionKind, trackId: string | null, start: () => Promise<{ job_id: string }>) => {
       if (jobRef.current) {
-        onError('Ya hay una transcripción en curso')
+        onError(tr('Ya hay una transcripción en curso'))
         return
       }
-      const pending = { kind, trackId, jobId: null, progress: 0, message: 'preparando audio…' }
+      const pending = { kind, trackId, jobId: null, progress: 0, message: tr('preparando audio…') }
       jobRef.current = pending
       setJob(pending)
       try {

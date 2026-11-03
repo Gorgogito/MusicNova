@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, errorMessage, events, type PluginParam } from '../lib/api'
 import { Icon } from './Icon'
+import { tr } from '../i18n'
 
 /** Cada cuánto se releen los parámetros con el panel abierto: refleja lo que se
  * mueve en la ventana del propio plugin (y los plugins que cambian su lista). */
@@ -32,7 +33,7 @@ export function PluginControls({ slotId }: { slotId: string }) {
     const un = events.pluginFailed((e) => {
       if (e.slot_id !== slotId) return
       setFailed(true)
-      setError(e.message)
+      setError(e.message) // ya traducido por events.pluginFailed
     })
     return () => {
       un.then((f) => f())
@@ -88,7 +89,7 @@ export function PluginControls({ slotId }: { slotId: string }) {
               .catch((e) => setError(errorMessage(e)))
           }
         >
-          <Icon name="sliders" size={14} /> Abrir interfaz
+          <Icon name="sliders" size={14} /> {tr('Abrir interfaz')}
         </button>
         <button className={`btn ghost small ${open ? 'active' : ''}`} onClick={() => setOpen(!open)}>
           Parámetros{params ? ` (${params.length})` : ''}
@@ -99,7 +100,7 @@ export function PluginControls({ slotId }: { slotId: string }) {
           {error}
           {(failed || /dejó de responder|se cerró/.test(error)) && (
             <button className="btn small" style={{ marginLeft: 8 }} onClick={restart}>
-              Reiniciar plugin
+              {tr('Reiniciar plugin')}
             </button>
           )}
         </div>
@@ -107,9 +108,9 @@ export function PluginControls({ slotId }: { slotId: string }) {
       {open && params && (
         <>
           {params.length > 12 && (
-            <input className="plugin-filter" type="text" placeholder="Buscar parámetro…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+            <input className="plugin-filter" type="text" placeholder={tr('Buscar parámetro…')} value={filter} onChange={(e) => setFilter(e.target.value)} />
           )}
-          {params.length === 0 && <span className="small muted">El plugin no publica parámetros.</span>}
+          {params.length === 0 && <span className="small muted">{tr('El plugin no publica parámetros.')}</span>}
           <div className="fx-controls">
             {shown.map((p) => (
               <label key={p.id} className="fx-control" title={p.name}>

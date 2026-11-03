@@ -77,7 +77,7 @@ pub async fn denoise_steady(app: AppHandle, track_id: Uuid, settings: DenoiseSet
             &state,
             &clean,
             format!("{DENOISED_DIR}{track_id}.flac"),
-            format!("{} · sin ruido", info.name),
+            crate::i18n::name_with("{} · sin ruido", &info.name),
             Some(track_id),
             0.0,
         )
@@ -253,7 +253,7 @@ pub async fn generate_apply(app: AppHandle, track: String) -> Result<ProjectView
         let gain = matched_gain(&state, &buf, &track)?;
         // Cada generación se distingue por su número («Batería · generado 2»).
         let (_, project) = session_snapshot(&state)?;
-        let base = format!("{label} · generado");
+        let base = crate::i18n::name_with("{} · generado", &crate::i18n::name(label));
         let taken = |n: &str| project.tracks.iter().any(|t| t.name == n);
         let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap();
         let view = add_buffer_track(

@@ -34,14 +34,15 @@ import { JOB_LABEL, useTranscription } from './lib/useTranscription'
 import { GENERATION_LABEL, useGeneration } from './lib/useGeneration'
 import { useMasterReference } from './lib/useMasterReference'
 import { useRecorder } from './lib/useRecorder'
+import { tr, trBackend } from './i18n'
 
 type View = 'projects' | 'studio' | 'models' | 'system'
 
 const NAV: { id: View; label: string; icon: string }[] = [
-  { id: 'projects', label: 'Proyectos', icon: 'folder' },
-  { id: 'studio', label: 'Estudio', icon: 'studio' },
-  { id: 'models', label: 'Modelos IA', icon: 'model' },
-  { id: 'system', label: 'Sistema', icon: 'system' },
+  { id: 'projects', label: tr('Proyectos'), icon: 'folder' },
+  { id: 'studio', label: tr('Estudio'), icon: 'studio' },
+  { id: 'models', label: tr('Modelos IA'), icon: 'model' },
+  { id: 'system', label: tr('Sistema'), icon: 'system' },
 ]
 
 const IDLE: TransportEvent = {
@@ -81,7 +82,7 @@ export default function App() {
     const subs = [
       events.transport(setTransport),
       events.workerStatus(setWorker),
-      events.pluginFailed((e) => showError(`${e.message}. La aplicación sigue funcionando; el efecto suena sin procesar hasta que lo reinicies.`)),
+      events.pluginFailed((e) => showError(tr('{message}. La aplicación sigue funcionando; el efecto suena sin procesar hasta que lo reinicies.', { message: e.message }))),
       // Una herramienta recién instalada (p. ej. FFmpeg) cambia lo que se puede importar.
       events.worker((ev) => {
         if (ev.event === 'job.done' && ev.data.kind === 'models.install') api.appInfo().then(setInfo).catch(() => {})
@@ -98,7 +99,7 @@ export default function App() {
       try {
         const p = await action()
         setProject(p)
-        p.plugin_errors.forEach((e) => showError(`Plugin no disponible (suena sin procesar): ${e}`))
+        p.plugin_errors.forEach((e) => showError(tr('Plugin no disponible (suena sin procesar): {error}', { error: trBackend(e) })))
         setTransport({ ...IDLE, duration: timelineEnd(p.tracks) })
         setView('studio')
       } catch (e) {
@@ -111,11 +112,11 @@ export default function App() {
   )
 
   const importAudio = useCallback(
-    (path: string) => load('Importando y analizando el audio…', () => api.importAudio(path)),
+    (path: string) => load(tr('Importando y analizando el audio…'), () => api.importAudio(path)),
     [load],
   )
-  const openProject = useCallback((dir: string) => load('Abriendo proyecto…', () => api.openProject(dir)), [load])
-  const createProject = useCallback((name: string) => load('Creando proyecto…', () => api.createProject(name)), [load])
+  const openProject = useCallback((dir: string) => load(tr('Abriendo proyecto…'), () => api.openProject(dir)), [load])
+  const createProject = useCallback((name: string) => load(tr('Creando proyecto…'), () => api.createProject(name)), [load])
 
   const recorder = useRecorder(showError)
   const recorderFinished = recorder.finished
@@ -227,7 +228,7 @@ export default function App() {
           break
         case 'KeyM':
           changePractice({
-            markers: [...p.markers, { id: crypto.randomUUID(), name: `Marcador ${p.markers.length + 1}`, time: pos }],
+            markers: [...p.markers, { id: crypto.randomUUID(), name: tr('Marcador {n}', { n: p.markers.length + 1 }), time: pos }],
           })
           break
         case 'Minus':
@@ -289,7 +290,7 @@ export default function App() {
   const [masterWarnings, setMasterWarnings] = useState<string[]>([])
   const onMastered = useCallback((p: ProjectView, r: MasterReferenceResult) => {
     setProject(p)
-    setMasterWarnings(r.warnings)
+    setMasterWarnings(r.warnings.map((w) => trBackend(w)))
   }, [])
   const masterJob = useMasterReference(onMastered, showError)
 
@@ -348,11 +349,11 @@ export default function App() {
         </nav>
         <div className="sidebar-footer small">
           <span className={`dot ${worker?.state ?? 'stopped'}`} />
-          IA local: {worker?.state === 'ready' ? 'lista' : worker?.state === 'crashed' ? 'error' : 'iniciando'}
+          {worker?.state === 'ready' ? tr('IA local: lista') : worker?.state === 'crashed' ? tr('IA local: error') : tr('IA local: iniciando')}
         </div>
         {separation.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
-            Separando… {Math.round(separation.job.progress * 100)}%
+            {tr('Separando… {pct}%', { pct: Math.round(separation.job.progress * 100) })}
             <div className="progress">
               <div style={{ width: `${separation.job.progress * 100}%` }} />
             </div>
@@ -360,7 +361,7 @@ export default function App() {
         )}
         {masterJob.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
-            Masterizando… {Math.round(masterJob.job.progress * 100)}%
+            {tr('Masterizando… {pct}%', { pct: Math.round(masterJob.job.progress * 100) })}
             <div className="progress">
               <div style={{ width: `${masterJob.job.progress * 100}%` }} />
             </div>
@@ -368,12 +369,12 @@ export default function App() {
         )}
         {transport.recording && (
           <button className="sidebar-job small rec-status" onClick={() => setView('studio')}>
-            ● Grabando… {Math.floor(transport.recorded)} s
+            ● {tr('Grabando… {s} s', { s: Math.floor(transport.recorded) })}
           </button>
         )}
         {lyricsJob.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
-            Transcribiendo… {Math.round(lyricsJob.job.progress * 100)}%
+            {tr('Transcribiendo… {pct}%', { pct: Math.round(lyricsJob.job.progress * 100) })}
             <div className="progress">
               <div style={{ width: `${lyricsJob.job.progress * 100}%` }} />
             </div>
@@ -397,7 +398,7 @@ export default function App() {
         )}
         {analysisJob.job && (
           <button className="sidebar-job small" onClick={() => setView('studio')}>
-            Analizando… {Math.round(analysisJob.job.progress * 100)}%
+            {tr('Analizando… {pct}%', { pct: Math.round(analysisJob.job.progress * 100) })}
             <div className="progress">
               <div style={{ width: `${analysisJob.job.progress * 100}%` }} />
             </div>

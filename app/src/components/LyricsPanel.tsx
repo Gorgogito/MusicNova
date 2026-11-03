@@ -5,6 +5,7 @@ import { activeLine, LANGUAGES, languageName, newLineAt, retextLine, shiftAll, s
 import type { LyricsJob } from '../lib/useLyrics'
 import { formatTime } from '../lib/format'
 import { Icon } from './Icon'
+import { tr, plural, trBackend } from '../i18n'
 
 interface Props {
   lyrics: Lyrics | null
@@ -22,10 +23,10 @@ interface Props {
 }
 
 const EXPORTS: { id: LyricsFormat; label: string; ext: string }[] = [
-  { id: 'lrc', label: 'LRC (por línea)', ext: 'lrc' },
-  { id: 'lrc_words', label: 'LRC karaoke (por palabra)', ext: 'lrc' },
-  { id: 'srt', label: 'Subtítulos SRT', ext: 'srt' },
-  { id: 'txt', label: 'Texto', ext: 'txt' },
+  { id: 'lrc', label: tr('LRC (por línea)'), ext: 'lrc' },
+  { id: 'lrc_words', label: tr('LRC karaoke (por palabra)'), ext: 'lrc' },
+  { id: 'srt', label: tr('Subtítulos SRT'), ext: 'srt' },
+  { id: 'txt', label: tr('Texto'), ext: 'txt' },
 ]
 
 export function LyricsPanel(props: Props) {
@@ -56,10 +57,10 @@ export function LyricsPanel(props: Props) {
     return (
       <div className="panel">
         <div className="panel-row">
-          <strong>Transcribiendo la letra</strong>
+          <strong>{tr('Transcribiendo la letra')}</strong>
           <span className="muted small">{job.message}</span>
           <button className="btn ghost small" onClick={props.onCancel} disabled={!job.jobId}>
-            <Icon name="x" size={14} /> Cancelar
+            <Icon name="x" size={14} /> {tr('Cancelar')}
           </button>
         </div>
         <div className="progress">
@@ -73,38 +74,38 @@ export function LyricsPanel(props: Props) {
     const noModels = models !== null && models.length === 0
     return (
       <div className="panel">
-        {!workerReady && <span className="muted">El proceso de IA se está iniciando…</span>}
+        {!workerReady && <span className="muted">{tr('El proceso de IA se está iniciando…')}</span>}
         <p className="small muted">
-          Transcribe la letra con marcas de tiempo por palabra para cantar en modo karaoke y exportarla a LRC o SRT.
+          {tr('Transcribe la letra con marcas de tiempo por palabra para cantar en modo karaoke y exportarla a LRC o SRT.')}
         </p>
         {!props.hasVocalsStem && (
           <div className="notice small">
-            Consejo: separa primero los stems. Con la voz aislada la transcripción es mucho más fiable.
+            {tr('Consejo: separa primero los stems. Con la voz aislada la transcripción es mucho más fiable.')}
           </div>
         )}
         {noModels ? (
           <div className="panel-row">
-            <span>Necesitas descargar un modelo Whisper (una sola vez).</span>
+            <span>{tr('Necesitas descargar un modelo Whisper (una sola vez).')}</span>
             <button className="btn primary" onClick={props.onOpenModels}>
-              <Icon name="download" size={16} /> Ver modelos
+              <Icon name="download" size={16} /> {tr('Ver modelos')}
             </button>
           </div>
         ) : (
           <div className="panel-row">
             <label className="field">
-              <span className="small muted">Modelo</span>
+              <span className="small muted">{tr('Modelo')}</span>
               <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
                 {models?.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.name}
+                    {trBackend(m.name)}
                   </option>
                 ))}
               </select>
             </label>
             <label className="field">
-              <span className="small muted">Idioma</span>
+              <span className="small muted">{tr('Idioma')}</span>
               <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-                <option value="auto">Detectar automáticamente</option>
+                <option value="auto">{tr('Detectar automáticamente')}</option>
                 {LANGUAGES.map(([code, name]) => (
                   <option key={code} value={code}>
                     {name}
@@ -113,9 +114,9 @@ export function LyricsPanel(props: Props) {
               </select>
             </label>
             <label className="field">
-              <span className="small muted">Procesar con</span>
+              <span className="small muted">{tr('Procesar con')}</span>
               <select value={device} onChange={(e) => setDevice(e.target.value)}>
-                <option value="auto">Automático (GPU si está disponible)</option>
+                <option value="auto">{tr('Automático (GPU si está disponible)')}</option>
                 <option value="cpu">CPU</option>
               </select>
             </label>
@@ -127,13 +128,13 @@ export function LyricsPanel(props: Props) {
                 props.onStart(modelId || undefined, language, device)
               }}
             >
-              <Icon name="mic" size={16} /> Transcribir
+              <Icon name="mic" size={16} /> {tr('Transcribir')}
             </button>
           </div>
         )}
         {lyrics && (
           <button className="link small" onClick={() => setMode('karaoke')}>
-            Volver a la letra
+            {tr('Volver a la letra')}
           </button>
         )}
       </div>
@@ -148,7 +149,7 @@ export function LyricsPanel(props: Props) {
         filters: [{ name: f.ext.toUpperCase(), extensions: [f.ext] }],
       })
       if (!path) return
-      setStatus(`Guardado en ${await api.lyricsExport(path, f.id)}`)
+      setStatus(tr('Guardado en {path}', { path: await api.lyricsExport(path, f.id) }))
     } catch (e) {
       props.onError(errorMessage(e))
     }
@@ -159,16 +160,16 @@ export function LyricsPanel(props: Props) {
     <div className="panel-row lyrics-head">
       <div className="seg small">
         <button className={mode === 'karaoke' ? 'on' : ''} onClick={() => setMode('karaoke')}>
-          Karaoke
+          {tr('Karaoke')}
         </button>
         <button className={mode === 'edit' ? 'on' : ''} onClick={() => setMode('edit')}>
-          Editar
+          {tr('Editar')}
         </button>
       </div>
       <span className="small muted">
         {languageName(lyrics.language)}
-        {lowConfidence && ' (poco seguro)'} · {lyrics.lines.length} líneas ·{' '}
-        {lyrics.source === 'vocals' ? 'voz aislada' : 'mezcla completa'}
+        {lowConfidence && tr(' (poco seguro)')} · {plural(lyrics.lines.length, '{n} línea', '{n} líneas')} ·{' '}
+        {lyrics.source === 'vocals' ? tr('voz aislada') : tr('mezcla completa')}
       </span>
       <select
         className="compact"
@@ -177,9 +178,9 @@ export function LyricsPanel(props: Props) {
           const f = EXPORTS.find((x) => x.id === e.target.value)
           if (f) exportAs(f)
         }}
-        aria-label="Exportar letra"
+        aria-label={tr('Exportar letra')}
       >
-        <option value="">Exportar…</option>
+        <option value="">{tr('Exportar…')}</option>
         {EXPORTS.map((f) => (
           <option key={f.id} value={f.id}>
             {f.label}
@@ -187,7 +188,7 @@ export function LyricsPanel(props: Props) {
         ))}
       </select>
       <button className="btn ghost small" onClick={() => setMode('setup')}>
-        <Icon name="refresh" size={14} /> Volver a transcribir
+        <Icon name="refresh" size={14} /> {tr('Volver a transcribir')}
       </button>
     </div>
   )
@@ -197,11 +198,10 @@ export function LyricsPanel(props: Props) {
       {header}
       {lowConfidence && (
         <div className="notice small">
-          No está claro el idioma ({Math.round(lyrics.language_probability * 100)} %). Si la letra sale mal, vuelve a
-          transcribir eligiendo el idioma.
+          {tr('No está claro el idioma ({pct} %). Si la letra sale mal, vuelve a transcribir eligiendo el idioma.', { pct: Math.round(lyrics.language_probability * 100) })}
         </div>
       )}
-      {lyrics.warning && <div className="notice small">{lyrics.warning}</div>}
+      {lyrics.warning && <div className="notice small">{trBackend(lyrics.warning)}</div>}
       {status && <span className="small muted">{status}</span>}
       {mode === 'karaoke' ? (
         <Karaoke lines={lyrics.lines} position={position} onSeek={props.onSeek} />
@@ -215,7 +215,7 @@ export function LyricsPanel(props: Props) {
 function Karaoke({ lines, position, onSeek }: { lines: LyricLine[]; position: number; onSeek: (t: number) => void }) {
   const i = activeLine(lines, position)
   const visible = [i - 1, i, i + 1, i + 2]
-  if (lines.length === 0) return <p className="muted">No se encontró letra cantada.</p>
+  if (lines.length === 0) return <p className="muted">{tr('No se encontró letra cantada.')}</p>
   return (
     <div className="karaoke">
       {visible.map((k, slot) => {
@@ -261,7 +261,7 @@ function Editor({
   return (
     <div className="lyrics-editor">
       <div className="panel-row small">
-        <span className="muted">Sincronía de toda la letra:</span>
+        <span className="muted">{tr('Sincronía de toda la letra:')}</span>
         <button className="btn small" onClick={() => onChange(shiftAll(lyrics, -0.1))}>
           −0,1 s
         </button>
@@ -275,18 +275,18 @@ function Editor({
             setLines(lines)
           }}
         >
-          <Icon name="plus" size={14} /> Línea aquí
+          <Icon name="plus" size={14} /> {tr('Línea aquí')}
         </button>
       </div>
       <div className="lyrics-list">
         {lyrics.lines.map((line, k) => (
           <div key={`${k}-${line.start}`} className={`lyrics-row ${k === current ? 'now' : ''}`}>
-            <button className="mono small time-btn" title="Ir a esta línea" onClick={() => onSeek(line.start)}>
+            <button className="mono small time-btn" title={tr('Ir a esta línea')} onClick={() => onSeek(line.start)}>
               {formatTime(line.start).slice(0, -1)}
             </button>
             <button
               className="icon-btn"
-              title="La línea empieza en la posición actual"
+              title={tr('La línea empieza en la posición actual')}
               onClick={() => update(k, shiftLine(line, position - line.start))}
             >
               <Icon name="pin" size={14} />
@@ -301,7 +301,7 @@ function Editor({
             />
             <button
               className="icon-btn"
-              title="Eliminar línea"
+              title={tr('Eliminar línea')}
               onClick={() => setLines(lyrics.lines.filter((_, j) => j !== k))}
             >
               <Icon name="trash" size={14} />

@@ -3,18 +3,19 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { api, errorMessage, events, type ModelInfo, type WorkerStatus } from '../lib/api'
 import { formatBytes } from '../lib/format'
 import { Icon } from '../components/Icon'
+import { tr, trBackend } from '../i18n'
 
 const TASK_LABELS: Record<string, string> = {
-  separation: 'Separación de stems',
-  chords: 'Acordes',
-  beats: 'Pulso y tempo',
-  key: 'Tonalidad',
-  lyrics: 'Letras',
-  transcription: 'Audio a MIDI',
-  instruments: 'Detección de instrumentos',
-  generation: 'Acompañamientos (IA generativa)',
-  denoise: 'Limpieza de ruido',
-  tool: 'Herramientas',
+  separation: tr('Separación de stems'),
+  chords: tr('Acordes'),
+  beats: tr('Pulso y tempo'),
+  key: tr('Tonalidad'),
+  lyrics: tr('Letras'),
+  transcription: tr('Audio a MIDI'),
+  instruments: tr('Detección de instrumentos'),
+  generation: tr('Acompañamientos (IA generativa)'),
+  denoise: tr('Limpieza de ruido'),
+  tool: tr('Herramientas'),
 }
 
 interface Job {
@@ -56,7 +57,7 @@ export function ModelsView({ worker, onError }: { worker: WorkerStatus | null; o
         }
         const next = { ...prev }
         delete next[modelId]
-        if (ev.event === 'job.failed') onError(`No se pudo instalar ${modelId}: ${ev.data.error}`)
+        if (ev.event === 'job.failed') onError(tr('No se pudo instalar {model}: {error}', { model: modelId, error: ev.data.error }))
         refresh()
         return next
       })
@@ -69,7 +70,7 @@ export function ModelsView({ worker, onError }: { worker: WorkerStatus | null; o
   const install = async (m: ModelInfo) => {
     try {
       const { job_id } = await api.worker<{ job_id: string }>('models.install', { model_id: m.id })
-      setJobs((prev) => ({ ...prev, [m.id]: { jobId: job_id, progress: 0, message: 'iniciando…' } }))
+      setJobs((prev) => ({ ...prev, [m.id]: { jobId: job_id, progress: 0, message: tr('iniciando…') } }))
     } catch (e) {
       onError(errorMessage(e))
     }
@@ -98,17 +99,17 @@ export function ModelsView({ worker, onError }: { worker: WorkerStatus | null; o
     <section className="models">
       <header className="view-header">
         <div>
-          <h1>Modelos de IA</h1>
+          <h1>{tr('Modelos de IA')}</h1>
           <p className="muted">
-            Los modelos se descargan una sola vez, se verifican con SHA-256 y después funcionan sin conexión.
+            {tr('Los modelos se descargan una sola vez, se verifican con SHA-256 y después funcionan sin conexión.')}
           </p>
         </div>
         <button className="btn ghost" onClick={refresh} disabled={!ready}>
-          <Icon name="refresh" size={16} /> Actualizar
+          <Icon name="refresh" size={16} /> {tr('Actualizar')}
         </button>
       </header>
 
-      {!ready && <div className="notice">El proceso de IA no está listo. Revisa el estado en «Sistema».</div>}
+      {!ready && <div className="notice">{tr('El proceso de IA no está listo. Revisa el estado en «Sistema».')}</div>}
       {manifestErrors.map((e) => (
         <div key={e} className="notice error">
           {e}
@@ -124,16 +125,16 @@ export function ModelsView({ worker, onError }: { worker: WorkerStatus | null; o
               return (
                 <article key={m.id} className={`card model ${m.installed ? 'installed' : ''}`}>
                   <div className="model-head">
-                    <h3>{m.name}</h3>
-                    {m.installed && <span className="badge ok">Instalado</span>}
+                    <h3>{trBackend(m.name)}</h3>
+                    {m.installed && <span className="badge ok">{tr('Instalado')}</span>}
                   </div>
-                  <p className="muted small">{m.description}</p>
+                  <p className="muted small">{trBackend(m.description)}</p>
                   <div className="badges">
-                    <button className="badge link" onClick={() => openUrl(m.license_url)} title="Ver licencia">
+                    <button className="badge link" onClick={() => openUrl(m.license_url)} title={tr('Ver licencia')}>
                       {m.license}
                     </button>
                     <span className={`badge ${m.commercial_use ? '' : 'warn'}`}>
-                      {m.commercial_use ? 'Uso comercial permitido' : 'Solo uso no comercial'}
+                      {m.commercial_use ? tr('Uso comercial permitido') : tr('Solo uso no comercial')}
                     </span>
                     <span className="badge">{formatBytes(m.size_bytes)}</span>
                     {m.min_vram_gb != null && <span className="badge">GPU ≥ {m.min_vram_gb} GB (opcional)</span>}
@@ -148,16 +149,16 @@ export function ModelsView({ worker, onError }: { worker: WorkerStatus | null; o
                         {Math.round(job.progress * 100)}% · {job.message}
                       </span>
                       <button className="btn ghost small" onClick={() => cancel(m.id)}>
-                        <Icon name="x" size={14} /> Cancelar
+                        <Icon name="x" size={14} /> {tr('Cancelar')}
                       </button>
                     </div>
                   ) : m.installed ? (
                     <button className="btn ghost" onClick={() => remove(m)}>
-                      <Icon name="trash" size={16} /> Eliminar
+                      <Icon name="trash" size={16} /> {tr('Eliminar')}
                     </button>
                   ) : (
                     <button className="btn primary" onClick={() => install(m)} disabled={!ready}>
-                      <Icon name="download" size={16} /> Descargar
+                      <Icon name="download" size={16} /> {tr('Descargar')}
                     </button>
                   )}
                 </article>

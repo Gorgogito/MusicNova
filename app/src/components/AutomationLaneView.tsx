@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { AutomationLane, AutoPoint } from '../lib/api'
 import { fromNorm, toNorm, type TargetInfo } from '../lib/automation'
+import { tr } from '../i18n'
 
 interface Props {
   lane: AutomationLane
@@ -110,7 +111,7 @@ export function AutomationLaneView({ lane, info, duration, color, locked, snap, 
     >
       <div className="auto-inner" ref={areaRef}>
         {points.length === 0 ? (
-          <span className="auto-empty small muted">Haz clic para añadir el primer punto</span>
+          <span className="auto-empty small muted">{tr('Haz clic para añadir el primer punto')}</span>
         ) : (
           <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
             <polygon points={`0,100 ${path} 1000,100`} className="auto-fill" />
@@ -122,7 +123,7 @@ export function AutomationLaneView({ lane, info, duration, color, locked, snap, 
             key={i}
             className={`auto-point ${drag?.index === i ? 'active' : ''}`}
             style={{ left: `${(p.time / duration) * 100}%`, top: `${100 - toNorm(info, p.value) * 100}%` }}
-            title={`${info.format(p.value)} · ${p.time.toFixed(2)} s (doble clic o clic derecho: borrar)`}
+            title={tr('{value} · {time} s (doble clic o clic derecho: borrar)', { value: info.format(p.value), time: p.time.toFixed(2) })}
             onPointerDown={(e) => onPointDown(e, i)}
             onDoubleClick={(e) => removePoint(e, i)}
             onContextMenu={(e) => removePoint(e, i)}

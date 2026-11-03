@@ -1,6 +1,7 @@
 // Notas transcritas (piano roll) y medidas de afinación a partir de la curva de tono.
 import type { MusicalKey, Note, PitchCurve } from './api'
 import { mod12, noteName, type Notation } from './chords'
+import { tr } from '../i18n'
 
 /** Duración mínima de una nota editada (s); el núcleo admite 0,02. */
 export const MIN_NOTE = 0.03
@@ -14,28 +15,28 @@ export const isBlackKey = (pitch: number) => [1, 3, 6, 8, 10].includes(mod12(pit
 
 /** Nombres de las alturas del mapa de percusión General MIDI que se transcriben o se suelen usar. */
 export const DRUM_NAMES: Record<number, string> = {
-  35: 'Bombo 2',
-  36: 'Bombo',
-  37: 'Aro',
-  38: 'Caja',
-  39: 'Palmas',
-  40: 'Caja 2',
-  41: 'Tom de suelo',
-  42: 'Charles cerrado',
-  43: 'Tom de suelo 2',
-  44: 'Charles (pedal)',
-  45: 'Tom grave',
-  46: 'Charles abierto',
-  47: 'Tom medio',
-  48: 'Tom agudo',
-  49: 'Crash',
-  50: 'Tom agudo 2',
-  51: 'Ride',
+  35: tr('Bombo 2'),
+  36: tr('Bombo'),
+  37: tr('Aro'),
+  38: tr('Caja'),
+  39: tr('Palmas'),
+  40: tr('Caja 2'),
+  41: tr('Tom de suelo'),
+  42: tr('Charles cerrado'),
+  43: tr('Tom de suelo 2'),
+  44: tr('Charles (pedal)'),
+  45: tr('Tom grave'),
+  46: tr('Charles abierto'),
+  47: tr('Tom medio'),
+  48: tr('Tom agudo'),
+  49: tr('Crash'),
+  50: tr('Tom agudo 2'),
+  51: tr('Ride'),
 }
 
 /** Nombre de una altura: nota musical o instrumento de batería. */
 export function pitchLabel(pitch: number, notation: Notation, drums: boolean): string {
-  return drums ? (DRUM_NAMES[pitch] ?? `Percusión ${pitch}`) : noteLabel(pitch, notation)
+  return drums ? (DRUM_NAMES[pitch] ?? tr('Percusión {n}', { n: pitch })) : noteLabel(pitch, notation)
 }
 
 /** Desvío (cents) de la curva de una nota a `dt` segundos de su inicio. */
