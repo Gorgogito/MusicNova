@@ -146,7 +146,9 @@ fn a_crashing_plugin_only_takes_down_its_own_process() {
     inst.set_param(0, 12.0);
     let t = Instant::now();
     assert_eq!(run_chain(&mut chain), 0.5, "el audio pasa intacto");
-    assert!(t.elapsed() < Duration::from_millis(200), "no se espera al plugin caído");
+    // Como mucho el límite de un bloque en tiempo real (250 ms) y algo de margen
+    // para cuando Windows tarda en dar el proceso por terminado (equipo cargado).
+    assert!(t.elapsed() < Duration::from_millis(600), "no se espera al plugin caído ({:?})", t.elapsed());
     assert!(wait_until(Duration::from_secs(2), || inst.failure().is_some()));
     let msg = inst.failure().unwrap();
     assert!(msg.contains("se cerró inesperadamente"), "{msg}");

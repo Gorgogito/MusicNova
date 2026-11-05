@@ -18,3 +18,6 @@ Thumbs.db
 
 # Datos de evaluación (se descargan con ai-worker/eval/fetch.py; no se redistribuyen)
 ai-worker/eval-data/
+# Python que se incluye en el instalador (lo descarga app/scripts/fetch-python.mjs)
+app/src-tauri/resources/python/
+app/src-tauri/resources/.python-tmp-*/

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && node scripts/prepare-bundle.mjs",
     "frontendDist": "../dist"
   },
   "app": {
@@ -27,7 +27,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "license": "GPL-3.0-or-later",
     "category": "Music",
     "shortDescription": "Estudio musical con IA local y gratuita",
@@ -36,6 +38,23 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "resources/python": "python",
+      "../../ai-worker/musicnova_ai": "ai-worker/musicnova_ai"
+    },
+    "publisher": "MusicNova",
+    "copyright": "GPL-3.0-or-later",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "Spanish",
+          "English"
+        ],
+        "displayLanguageSelector": true,
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
   }
 }

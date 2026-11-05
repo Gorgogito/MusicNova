@@ -6,11 +6,11 @@ import io
 import sys
 from typing import Any
 
-from . import PROTOCOL_VERSION, __version__, system
+from . import PROTOCOL_VERSION, __version__, deps, system
 from .jobs import JobManager
 from .models import ModelManager, data_dir
 from .rpc import RpcError, Server
-from .tasks import REGISTRY, Task
+from .tasks import REGISTRY, Task, requires_for_model_task
 
 
 def build_server(out: io.TextIOBase, inp: io.TextIOBase) -> tuple[Server, JobManager]:
@@ -44,7 +44,15 @@ def build_server(out: io.TextIOBase, inp: io.TextIOBase) -> tuple[Server, JobMan
 
     def models_install(p: dict[str, Any]) -> dict[str, str]:
         mid = model_or_error(p)
-        return {"job_id": jobs.submit("models.install", lambda job: models.install(mid, job))}
+        def work(job):
+            result = models.install(mid, job)
+            # App instalada: el modelo llega con lo que necesita para usarse.
+            needed = requires_for_model_task(models.manifests[mid].task)
+            if deps.managed() and deps.missing(needed):
+                deps.ensure(needed, lambda p, m: job.report(p, m, force=True), 0.0, 1.0)
+            return result
+
+        return {"job_id": jobs.submit("models.install", work)}
 
     server.register("models.install", models_install)
 
@@ -62,10 +70,21 @@ def build_server(out: io.TextIOBase, inp: io.TextIOBase) -> tuple[Server, JobMan
         if task is None:
             raise RpcError("not_found", f"tarea desconocida: {tid}")
         ok, reason = task.available()
-        if not ok:
+        installable = deps.managed() and bool(deps.missing(task.requires))
+        if not ok and not installable:
             raise RpcError("unavailable", reason)
         params = p.get("params") or {}
-        return {"job_id": jobs.submit(tid, lambda job: task.run(params, job))}
+
+        def work(job):
+            # App instalada: la primera vez se instala lo que la tarea necesita.
+            if installable:
+                deps.ensure(task.requires, lambda pr, m: job.report(pr, m, force=True), 0.0, 0.9)
+                ok2, reason2 = task.available()
+                if not ok2:
+                    raise RuntimeError(reason2)
+            return task.run(params, job)
+
+        return {"job_id": jobs.submit(tid, work)}
 
     server.register("tasks.run", tasks_run)
     server.register("jobs.list", lambda p: jobs.list())

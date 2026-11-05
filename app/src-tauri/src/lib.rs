@@ -1542,9 +1542,13 @@ pub fn run() {
             std::fs::create_dir_all(&projects_root)?;
 
             let worker = Arc::new(Worker::new(app.handle().clone()));
-            if let Err(e) = worker.start() {
-                eprintln!("[musicnova] {e}");
-            }
+            // En otro hilo: la primera vez en la app instalada crea el entorno de IA.
+            let w = worker.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = w.start() {
+                    eprintln!("[musicnova] {e}");
+                }
+            });
             app.manage(AppState { engine, engine_error, session: Mutex::new(Session::default()), worker, projects_root });
             // Plugins: cada uno en su propio proceso (la app relanzada con
             // `--plugin-host`), salvo que se pida lo contrario para depurar.

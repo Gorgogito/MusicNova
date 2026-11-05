@@ -314,4 +314,11 @@ export const backendEn: Record<string, string> = {
   "PANNs Cnn14 · Instrumentos": "PANNs Cnn14 · Instruments",
   "Whisper large-v3 turbo · Letras": "Whisper large-v3 turbo · Lyrics",
   "Whisper small · Letras (ligero)": "Whisper small · Lyrics (light)",
+  "no se pudo rehacer el entorno de IA: {1}": "could not rebuild the AI environment: {1}",
+  "no se pudo crear el entorno de IA: {1}": "could not create the AI environment: {1}",
+  "no se encontró el código del proceso de IA en la instalación": "the AI process code was not found in the installation",
+  "no se encontró el Python incluido en la instalación": "the bundled Python was not found in the installation",
+  "instalando PyTorch (CUDA)": "installing PyTorch (CUDA)",
+  "instalando PyTorch (CPU)": "installing PyTorch (CPU)",
+  "instalando dependencias": "installing dependencies",
 }

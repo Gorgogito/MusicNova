@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::oneshot;
 
 type Reply = Result<Value, String>;
@@ -43,24 +43,109 @@ pub struct Worker {
 
 const STDERR_LINES: usize = 40;
 
-fn worker_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("MUSICNOVA_WORKER_DIR") {
-        return PathBuf::from(d);
-    }
-    // Desarrollo: el worker vive junto al código fuente.
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ai-worker"))
+/// Código del proceso de IA en el repositorio (desarrollo).
+const SOURCE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ai-worker");
+
+/// Dónde está el código del proceso de IA y con qué Python se ejecuta.
+struct Runtime {
+    dir: PathBuf,
+    python: PathBuf,
+    /// Entorno propio de la app instalada: las dependencias se instalan bajo demanda.
+    managed: bool,
 }
 
-fn python_exe(dir: &std::path::Path) -> PathBuf {
-    if let Ok(p) = std::env::var("MUSICNOVA_PYTHON") {
-        return PathBuf::from(p);
-    }
-    let venv = if cfg!(windows) { dir.join(".venv/Scripts/python.exe") } else { dir.join(".venv/bin/python") };
-    if venv.is_file() {
-        venv
+fn venv_python(venv: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
     } else {
-        PathBuf::from("python")
+        venv.join("bin").join("python")
     }
+}
+
+/// Sin el prefijo `\\?\` de las rutas de Tauri (más legible en «Sistema»).
+fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.display().to_string();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => p,
+    }
+}
+
+/// Carpeta de datos por usuario (la misma que usa el proceso de IA).
+pub fn data_dir() -> Option<PathBuf> {
+    if let Ok(d) = std::env::var("MUSICNOVA_DATA") {
+        return Some(PathBuf::from(d));
+    }
+    if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("MusicNova"))
+    } else {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/musicnova"))
+    }
+}
+
+/// Crea (o rehace, si cambió la versión de Python incluida) el entorno del
+/// proceso de IA a partir del Python que trae el instalador. Sin red: el venv
+/// sale con pip de la propia instalación y empieza sin paquetes.
+fn ensure_venv(bundled: &Path, venv: &Path) -> Result<(), String> {
+    let marker = bundled.join("MUSICNOVA_PYTHON_VERSION");
+    let want = std::fs::read_to_string(&marker).unwrap_or_default().trim().to_string();
+    let have_file = venv.join("MUSICNOVA_PYTHON_VERSION");
+    let have = std::fs::read_to_string(&have_file).unwrap_or_default().trim().to_string();
+    if venv_python(venv).is_file() && have == want {
+        return Ok(());
+    }
+    if venv.exists() {
+        std::fs::remove_dir_all(venv).map_err(|e| format!("no se pudo rehacer el entorno de IA: {e}"))?;
+    }
+    if let Some(parent) = venv.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let exe = if cfg!(windows) { bundled.join("python.exe") } else { bundled.join("bin").join("python3") };
+    let mut cmd = Command::new(&exe);
+    cmd.args(["-m", "venv"]).arg(venv);
+    if let Some(d) = data_dir() {
+        cmd.env("PYTHONPYCACHEPREFIX", d.join("cache").join("pycache"));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output().map_err(|e| format!("no se pudo iniciar Python ({}): {e}", exe.display()))?;
+    if !out.status.success() {
+        return Err(format!("no se pudo crear el entorno de IA: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let _ = std::fs::write(have_file, format!("{want}\n"));
+    Ok(())
+}
+
+fn runtime(app: &AppHandle) -> Result<Runtime, String> {
+    // Variables para depurar o para usar otro Python.
+    let env_dir = std::env::var_os("MUSICNOVA_WORKER_DIR").map(PathBuf::from);
+    let env_python = std::env::var_os("MUSICNOVA_PYTHON").map(PathBuf::from);
+    let resources = app.path().resource_dir().ok();
+    let bundled_python = resources.as_ref().map(|r| r.join("python")).filter(|p| p.join("MUSICNOVA_PYTHON_VERSION").is_file());
+    let bundled_worker = resources.as_ref().map(|r| r.join("ai-worker")).filter(|p| p.join("musicnova_ai").is_dir());
+
+    // Desarrollo: el código del repositorio y su .venv (MUSICNOVA_FORCE_MANAGED=1
+    // prueba en desarrollo el entorno gestionado de la app instalada).
+    let source = PathBuf::from(SOURCE_DIR);
+    let force_managed = std::env::var_os("MUSICNOVA_FORCE_MANAGED").is_some();
+    if (cfg!(debug_assertions) && !force_managed) || (env_dir.is_some() && bundled_python.is_none()) {
+        let dir = env_dir.unwrap_or(source);
+        let venv = venv_python(&dir.join(".venv"));
+        let python = env_python.unwrap_or(if venv.is_file() { venv } else { PathBuf::from("python") });
+        return Ok(Runtime { dir, python, managed: false });
+    }
+    // App instalada: el código empaquetado y un entorno propio por usuario.
+    let dir = env_dir.or(bundled_worker).ok_or("no se encontró el código del proceso de IA en la instalación")?;
+    if let Some(python) = env_python {
+        return Ok(Runtime { dir, python, managed: false });
+    }
+    let bundled = bundled_python.ok_or("no se encontró el Python incluido en la instalación")?;
+    let venv = data_dir().ok_or("no se encontró la carpeta de datos")?.join("envs").join("worker");
+    ensure_venv(&bundled, &venv)?;
+    Ok(Runtime { dir: plain_path(dir), python: venv_python(&venv), managed: true })
 }
 
 impl Worker {
@@ -94,21 +179,40 @@ impl Worker {
                 return Ok(());
             }
         }
-        let dir = worker_dir();
-        let python = python_exe(&dir);
         self.set_status(|s| {
             s.state = "starting".into();
-            s.python = python.display().to_string();
-            s.worker_dir = dir.display().to_string();
             s.error = None;
             s.stderr_tail.clear();
         });
+        let rt = runtime(&self.app).map_err(|e| {
+            self.set_status(|s| {
+                s.state = "crashed".into();
+                s.error = Some(e.clone());
+            });
+            e
+        })?;
+        let managed = rt.managed;
+        let (dir, python) = (rt.dir, rt.python);
+        self.set_status(|s| {
+            s.python = python.display().to_string();
+            s.worker_dir = dir.display().to_string();
+        });
 
         let mut cmd = Command::new(&python);
+        // App instalada: las cachés de bytecode van a la carpeta de datos, no a la del programa.
+        if managed {
+            if let Some(d) = data_dir() {
+                cmd.env("PYTHONPYCACHEPREFIX", d.join("cache").join("pycache"));
+            }
+        }
         cmd.args(["-u", "-m", "musicnova_ai"])
             .current_dir(&dir)
             .env("PYTHONPATH", &dir)
             .env("PYTHONIOENCODING", "utf-8")
+            // Que pip y Python no lean configuración ni paquetes del usuario.
+            .env("PYTHONNOUSERSITE", "1")
+            .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+            .env("MUSICNOVA_MANAGED_ENV", if managed { "1" } else { "0" })
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
