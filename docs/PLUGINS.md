@@ -67,12 +67,21 @@ El plugin de prueba (`mn-testplugin`) detecta ahora esos incumplimientos: `stop_
 `reset` fuera del hilo de audio, o la falta de `outputParameterChanges`. Los cuenta en
 `mn_test_violations` y la prueba `host_follows_threading_and_output_rules` falla si hay alguno.
 
+## Automatización y controlador VST3
+
+La automatización llega al procesador como cambios de parámetro por bloque. En VST3 el
+controlador es otro objeto: si el plugin no informa de vuelta de esos cambios (casi ninguno lo
+hace), su interfaz y los parámetros genéricos de la app se quedaban en el valor anterior. Ahora el
+hilo de audio guarda el último valor de cada parámetro en una tabla de átomos (sin reservar memoria
+ni bloquear) y el hilo principal lo pasa al controlador con `setParamNormalized`: unas 30 veces por
+segundo mientras la ventana del plugin está abierta (temporizador de la ventana) y cada vez que se
+leen los parámetros. Prueba `vst3_controller_follows_automation`; el plugin VST3 de prueba ya no
+repite como salida los cambios que recibe, que ocultaba el fallo.
+
 ## Limitaciones conocidas
 
 - `request_restart` de CLAP y `restartComponent` de VST3 no reinician el plugin. Ninguno de los
   probados lo necesitó.
-- La automatización llega al procesador del plugin como cambios de parámetro por bloque; en VST3
-  el controlador (y por tanto los parámetros genéricos de la app) no se actualiza mientras suena.
 - En vivo solo se leen notas, el pedal de sostenido y «soltar todo»: pitch bend, aftertouch y
   otros controladores MIDI se ignoran.
 

@@ -148,6 +148,9 @@ pub(crate) trait Backend: Send + Sync {
     fn param_from_text(&self, _id: u32, _text: &str) -> Option<f64> {
         None
     }
+    /// Principal, periódico mientras la interfaz del plugin está abierta: refleja
+    /// en ella lo que cambió en el audio (automatización).
+    fn idle(&self) {}
     /// Principal.
     fn save_state(&self) -> Option<Vec<u8>>;
     /// Principal.

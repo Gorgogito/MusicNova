@@ -349,3 +349,33 @@ fn instrument_plugins_play_live() {
     let synth = scan_file(&f.clap).unwrap().into_iter().find(|d| d.id == "org.musicnova.test-synth").unwrap();
     check_live_plugin_instrument(&synth.to_ref(), "inst:live-local");
 }
+
+/// La automatización de un VST3 llega al procesador y también a su controlador
+/// (lo que muestran la interfaz del plugin y los parámetros genéricos).
+#[test]
+fn vst3_controller_follows_automation() {
+    use mn_core::automation::{AutoPoint, AutomationLane, AutomationTarget, ChannelAutomation};
+    let f = fixture();
+    let rate = 48_000;
+    for (k, path) in [&f.vst3, &f.bundle].into_iter().enumerate() {
+        let slot_id = format!("slot-vst3-auto-{k}");
+        let r = plugin_ref(path, PluginFormat::Vst3);
+        let s = EffectSlot { sidechain: None, id: slot_id.clone(), enabled: true, params: EffectParams::Plugin, plugin: Some(r) };
+        let effects = std::slice::from_ref(&s);
+        let mut chain = Chain::new(effects, rate);
+        let inst = instance(&slot_id).expect("instancia viva");
+        let id = inst.params()[0].id;
+        assert_eq!(inst.params()[0].value, 1.0, "valor por defecto");
+        let target = AutomationTarget::Plugin { slot: slot_id.clone(), param: id, name: "Gain".into(), min: 0.0, max: 1.0 };
+        let points = vec![AutoPoint { time: 0.0, value: 0.25 }, AutoPoint { time: 1.0, value: 0.25 }];
+        let lanes = vec![AutomationLane { id: uuid::Uuid::new_v4(), target, enabled: true, points }];
+        let auto = ChannelAutomation::build(&lanes, effects, rate).expect("automatización");
+        auto.apply_effects(&mut chain, 0);
+        let mut buf = vec![0.5f32; 2 * 256];
+        chain.process(&mut buf);
+        assert_eq!(buf[0], 0.125, "el procesador sigue la curva");
+        assert_eq!(inst.params()[0].value, 0.25, "el controlador también");
+        drop(chain);
+        retain_instances(|i| i != slot_id);
+    }
+}

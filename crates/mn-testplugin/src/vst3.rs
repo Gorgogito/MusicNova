@@ -307,26 +307,12 @@ impl IAudioProcessorTrait for GainProcessor {
             }
         }
 
-        // El anfitrión debe ofrecer la lista de cambios de salida; cuando la
-        // ganancia cambia se informa de ella, como haría un plugin con un
-        // parámetro que modifica el propio procesador.
-        match ComRef::from_raw(process_data.outputParameterChanges) {
-            None => crate::violation("process sin outputParameterChanges"),
-            Some(out) => {
-                let changed = ComRef::from_raw(process_data.inputParameterChanges).is_some_and(|c| c.getParameterCount() > 0);
-                if changed {
-                    let mut index = 0;
-                    match ComRef::from_raw(out.addParameterData(&0, &mut index)) {
-                        Some(q) => {
-                            let mut point = 0;
-                            q.addPoint(0, f64::from_bits(self.gain.load(Ordering::Relaxed)), &mut point);
-                        }
-                        None => crate::violation("addParameterData devolvió nulo"),
-                    }
-                }
-            }
+        // El anfitrión debe ofrecer la lista de cambios de salida. Como la
+        // mayoría de los plugins, este no informa de vuelta de los cambios que
+        // recibe: el anfitrión debe reflejarlos él mismo en el controlador.
+        if ComRef::from_raw(process_data.outputParameterChanges).is_none() {
+            crate::violation("process sin outputParameterChanges");
         }
-
         let gain = f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
 
         let num_samples = process_data.numSamples as usize;

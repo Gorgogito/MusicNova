@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use vst3::Steinberg::Vst::*;
@@ -594,6 +594,49 @@ impl IEventListTrait for EventList {
 
 // ---- Instancia --------------------------------------------------------------------
 
+/// Valores del anfitrión pendientes de reflejar en el controlador, sin reservar
+/// memoria ni bloquear en el hilo de audio.
+#[derive(Default)]
+struct Reflect {
+    index: HashMap<u32, usize>,
+    slots: Vec<(u32, AtomicU64, AtomicBool)>,
+}
+
+impl Reflect {
+    fn new(controller: Option<&ComPtr<IEditController>>) -> Self {
+        let mut r = Reflect::default();
+        let Some(c) = controller else { return r };
+        unsafe {
+            for i in 0..c.getParameterCount() {
+                let mut info: ParameterInfo = std::mem::zeroed();
+                if c.getParameterInfo(i, &mut info) == kResultOk && !r.index.contains_key(&info.id) {
+                    r.index.insert(info.id, r.slots.len());
+                    r.slots.push((info.id, AtomicU64::new(0), AtomicBool::new(false)));
+                }
+            }
+        }
+        r
+    }
+
+    /// Audio.
+    fn set(&self, id: u32, v: f64) {
+        if let Some(&i) = self.index.get(&id) {
+            let (_, value, dirty) = &self.slots[i];
+            value.store(v.to_bits(), Ordering::Relaxed);
+            dirty.store(true, Ordering::Release);
+        }
+    }
+
+    /// Principal.
+    fn drain(&self, mut f: impl FnMut(u32, f64)) {
+        for (id, value, dirty) in &self.slots {
+            if dirty.swap(false, Ordering::Acquire) {
+                f(*id, f64::from_bits(value.load(Ordering::Relaxed)));
+            }
+        }
+    }
+}
+
 struct Scratch {
     events: ComWrapper<EventList>,
     changes: ComWrapper<ParamChanges>,
@@ -617,6 +660,10 @@ pub(crate) struct Vst3Plugin {
     component: ComPtr<IComponent>,
     /// Cambios de salida del procesador pendientes de reflejar en el controlador.
     out_rx: Mutex<rtrb::Consumer<(u32, f64)>>,
+    /// Último valor que mandó el anfitrión (automatización) por parámetro, para
+    /// reflejarlo en el controlador y su interfaz. El hilo de audio solo escribe
+    /// átomos; el principal los recoge en `idle`.
+    reflect: Reflect,
     separate_controller: bool,
     _host: ComWrapper<HostApp>,
     _handler: ComWrapper<Handler>,
@@ -781,6 +828,7 @@ impl Vst3Plugin {
         context.timeSigDenominator = 4;
         let (out_tx, out_rx) = rtrb::RingBuffer::new(1024);
         Self {
+            reflect: Reflect::new(controller.as_ref()),
             out_rx: Mutex::new(out_rx),
             component,
             processor,
@@ -808,9 +856,13 @@ impl Vst3Plugin {
         }
     }
 
-    /// Hilo principal: refleja en el controlador lo que informó el procesador.
+    /// Hilo principal: refleja en el controlador los valores de la automatización
+    /// y lo que informó el procesador.
     fn drain_output_changes(&self) {
         let Some(c) = &self.controller else { return };
+        self.reflect.drain(|id, v| unsafe {
+            c.setParamNormalized(id, v);
+        });
         let Ok(mut rx) = self.out_rx.lock() else { return };
         while let Ok((id, v)) = rx.pop() {
             unsafe { c.setParamNormalized(id, v) };
@@ -1010,7 +1062,10 @@ impl Backend for Vst3Plugin {
         s.changes.count.set(0);
         s.out_changes.count.set(0);
         for &(id, v) in params {
-            s.changes.set(id, v.clamp(0.0, 1.0));
+            let v = v.clamp(0.0, 1.0);
+            s.changes.set(id, v);
+            // El controlador (y la interfaz del plugin) lo verán en el próximo `idle`.
+            self.reflect.set(id, v);
         }
         // Lo que el usuario mueve en la interfaz del plugin llega al procesador por aquí.
         while let Ok((id, v)) = s.edits.pop() {
@@ -1066,6 +1121,10 @@ impl Backend for Vst3Plugin {
         });
         s.context.projectTimeSamples += n as i64;
         s.context.continousTimeSamples += n as i64;
+    }
+
+    fn idle(&self) {
+        self.drain_output_changes();
     }
 
     fn reset(&self) {

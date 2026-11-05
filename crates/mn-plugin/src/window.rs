@@ -13,13 +13,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, GetWindowLongW, IsWindow,
     LoadCursorW, RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowLongW, SetWindowPos, ShowWindow,
     CW_USEDEFAULT, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, IDC_ARROW, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOZORDER, SW_SHOW, WM_CLOSE, WM_NCDESTROY, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    SWP_NOZORDER, SW_SHOW, SetTimer, KillTimer, WM_CLOSE, WM_NCDESTROY, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use crate::{notify_editor_closed, owner_window, Instance};
 
 const CLASS: &str = "MusicNovaPluginWindow\0";
+/// Temporizador que refleja la automatización en la interfaz del plugin (~30 por segundo).
+const IDLE_TIMER: usize = 1;
+const IDLE_MS: u32 = 33;
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -74,7 +77,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
+        WM_TIMER if wparam == IDLE_TIMER => {
+            if let Some(b) = data.as_ref().and_then(|d| d.inst.upgrade()).and_then(|i| i.backend.clone()) {
+                b.idle();
+            }
+            0
+        }
         WM_NCDESTROY => {
+            KillTimer(hwnd, IDLE_TIMER);
             if !data.is_null() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 drop(Box::from_raw(data));
@@ -164,6 +174,7 @@ pub(crate) fn open(inst: &Arc<Instance>) -> Result<(), String> {
         let data = Box::into_raw(Box::new(WindowData { inst: Arc::downgrade(inst), resizable }));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, data as isize);
         resize_client(hwnd as isize, w, h);
+        SetTimer(hwnd, IDLE_TIMER, IDLE_MS, None);
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
     }
