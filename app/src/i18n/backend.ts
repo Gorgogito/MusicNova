@@ -321,4 +321,8 @@ export const backendEn: Record<string, string> = {
   "instalando PyTorch (CUDA)": "installing PyTorch (CUDA)",
   "instalando PyTorch (CPU)": "installing PyTorch (CPU)",
   "instalando dependencias": "installing dependencies",
+  "dirección de actualizaciones no válida: {1}": "invalid updates address: {1}",
+  "no se pudo comprobar si hay actualizaciones: {1}": "could not check for updates: {1}",
+  "no hay ninguna actualización pendiente: vuelve a comprobar": "there is no pending update: check again",
+  "no se pudo instalar la actualización: {1}": "could not install the update: {1}",
 }

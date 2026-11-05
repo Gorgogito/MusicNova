@@ -1971,3 +1971,29 @@ input.num.wide {
   width: 100%;
   box-sizing: border-box;
 }
+
+/* Aviso de versión nueva */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent, #4fd1c5);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #4fd1c5) 12%, transparent);
+}
+.update-banner span {
+  flex: 1;
+  min-width: 200px;
+}
+.update-banner .progress {
+  flex-basis: 100%;
+}
+.update-notes {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 6px 0;
+}

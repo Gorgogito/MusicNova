@@ -35,6 +35,8 @@ import { GENERATION_LABEL, useGeneration } from './lib/useGeneration'
 import { useMasterReference } from './lib/useMasterReference'
 import { useRecorder } from './lib/useRecorder'
 import { tr, trBackend } from './i18n'
+import { UpdateBanner } from './components/UpdateBanner'
+import { useUpdates } from './lib/updates'
 
 type View = 'projects' | 'studio' | 'models' | 'system'
 
@@ -68,6 +70,7 @@ export default function App() {
   const [worker, setWorker] = useState<WorkerStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([])
+  const updates = useUpdates()
   const toastId = useRef(0)
 
   const showError = useCallback((text: string) => {
@@ -408,6 +411,7 @@ export default function App() {
 
       <main className="content">
         {busy && <div className="busy-bar" />}
+        <UpdateBanner updates={updates} />
         {view === 'projects' && (
           <ProjectsView
             info={info}
@@ -448,7 +452,7 @@ export default function App() {
           />
         )}
         {view === 'models' && <ModelsView worker={worker} onError={showError} />}
-        {view === 'system' && <SystemView info={info} worker={worker} onError={showError} />}
+        {view === 'system' && <SystemView info={info} worker={worker} updates={updates} onError={showError} />}
       </main>
 
       <TransportBar transport={transport} enabled={!!project} practice={project?.project.practice} onError={showError} />

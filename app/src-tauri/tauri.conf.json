@@ -52,8 +52,20 @@
           "Spanish",
           "English"
         ],
-        "displayLanguageSelector": true,
+        "displayLanguageSelector": false,
         "installerHooks": "nsis/hooks.nsh"
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU4OTNCMTVCRTdBRkMyRUMKUldUc3dxL25XN0dUV0NFRHgycHZVSU1ORmRGK2todVYvS1ZLWUdHaUVwdDBjVis0WjNXdDd6WHEK",
+      "endpoints": [
+        "https://github.com/Gorgogito/MusicNova/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

@@ -6,6 +6,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { FORMAT_LABEL, scanPlugins, usePlugins } from '../lib/plugins'
 import { formatDate } from '../lib/format'
 import { LANGS, lang, plural, setLang, tr, type Lang, trBackend } from '../i18n'
+import type { Updates } from '../lib/updates'
 
 /** Carpetas, escaneo y resultado de los plugins CLAP/VST3. */
 function PluginsCard({ onError }: { onError: (m: string) => void }) {
@@ -114,7 +115,17 @@ const STATE_LABEL: Record<WorkerStatus['state'], string> = {
   crashed: tr('Con errores'),
 }
 
-export function SystemView({ info, worker, onError }: { info: AppInfo | null; worker: WorkerStatus | null; onError: (m: string) => void }) {
+export function SystemView({
+  info,
+  worker,
+  updates,
+  onError,
+}: {
+  info: AppInfo | null
+  worker: WorkerStatus | null
+  updates: Updates
+  onError: (m: string) => void
+}) {
   const [sys, setSys] = useState<SystemInfo | null>(null)
 
   useEffect(() => {
@@ -148,6 +159,7 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
       </header>
 
       <div className="card-grid">
+        <UpdatesCard updates={updates} />
         <article className="card">
           <h3>{tr('Audio')}</h3>
           {info?.engine_error ? (
@@ -212,5 +224,45 @@ export function SystemView({ info, worker, onError }: { info: AppInfo | null; wo
         <PluginsCard onError={onError} />
       </div>
     </section>
+  )
+}
+
+/** Versión instalada y búsqueda de versiones nuevas (GitHub Releases). */
+function UpdatesCard({ updates }: { updates: Updates }) {
+  const s = updates.state
+  const busy = s.kind === 'checking' || s.kind === 'installing'
+  return (
+    <article className="card">
+      <h3>{tr('Actualizaciones')}</h3>
+      <p className="small muted">
+        {s.kind === 'checking'
+          ? tr('Buscando versiones nuevas…')
+          : s.kind === 'current'
+            ? tr('Tienes la última versión.')
+            : s.kind === 'available'
+              ? tr('MusicNova {version} está disponible (tienes la {current}).', { version: s.info.version, current: s.info.current })
+              : s.kind === 'installing'
+                ? tr('Instalando MusicNova {version}…', { version: s.info.version })
+                : s.kind === 'error'
+                  ? s.message
+                  : tr('Las versiones nuevas se publican en GitHub y se instalan sin perder tus proyectos ni los modelos descargados.')}
+      </p>
+      {s.kind === 'available' && s.info.notes && <pre className="update-notes small">{s.info.notes}</pre>}
+      <div className="panel-row">
+        {s.kind === 'available' ? (
+          <button className="btn primary" disabled={busy} onClick={updates.install}>
+            <Icon name="download" size={16} /> {tr('Instalar y reiniciar')}
+          </button>
+        ) : (
+          <button className="btn" disabled={busy} onClick={() => updates.check()}>
+            <Icon name="refresh" size={16} /> {tr('Buscar actualizaciones')}
+          </button>
+        )}
+        <label className="check small">
+          <input type="checkbox" checked={updates.auto} onChange={(e) => updates.setAuto(e.target.checked)} />
+          {tr('Buscar al arrancar')}
+        </label>
+      </div>
+    </article>
   )
 }

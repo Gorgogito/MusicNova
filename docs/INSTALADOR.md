@@ -1,7 +1,8 @@
 # Instalador de Windows
 
 `MusicNova_<versión>_x64-setup.exe` (NSIS, unos 17 MB). Se instala por usuario, sin permisos de
-administrador, en `%LOCALAPPDATA%\Programs\MusicNova`. El asistente está en español e inglés. Sin
+administrador, en `%LOCALAPPDATA%\Programs\MusicNova`. El asistente está en español o inglés, según
+el idioma del sistema (sin selector: bloqueaba las actualizaciones pasivas). Sin
 certificado de firma de código por ahora: Windows SmartScreen avisa al ejecutarlo («Más
 información» → «Ejecutar de todas formas»).
 

@@ -292,6 +292,14 @@ export interface ProjectView {
 
 // ---- Fase 6: transcripción ----------------------------------------------------------
 
+/** Versión nueva publicada (actualizaciones). */
+export interface UpdateInfo {
+  version: string
+  current: string
+  notes: string | null
+  date: string | null
+}
+
 /** Tocar en vivo: teclados MIDI conectados, el abierto y la pista armada. */
 export interface LiveStatus {
   devices: string[]
@@ -612,6 +620,8 @@ export const api = {
   pluginParams: (slotId: string) => invoke<PluginParam[]>('plugin_params', { slotId }),
   pluginParamSet: (slotId: string, id: number, value: number) => invoke<void>('plugin_param_set', { slotId, id, value }),
   pluginRestart: (slotId: string) => invoke<void>('plugin_restart', { slotId }),
+  updateCheck: () => invoke<UpdateInfo | null>('update_check'),
+  updateInstall: () => invoke<void>('update_install'),
   liveStatus: () => invoke<LiveStatus>('live_status'),
   midiOpen: (index: number | null) => invoke<LiveStatus>('midi_open', { index }),
   liveArm: (trackId: string | null) => invoke<LiveStatus>('live_arm', { trackId }),
@@ -635,6 +645,9 @@ export const events = {
     listen<{ done: number; total: number; current: string }>('plugin-scan', (e) => cb(e.payload)),
   recordFinished: (cb: (r: RecordFinished) => void): Promise<UnlistenFn> =>
     listen<RecordFinished>('record-finished', (e) => cb({ ...e.payload, message: e.payload.message && trBackend(e.payload.message) })),
+  /** Avance de la descarga de una actualización (bytes). */
+  updateProgress: (cb: (p: { downloaded: number; total: number | null }) => void): Promise<UnlistenFn> =>
+    listen<{ downloaded: number; total: number | null }>('update-progress', (e) => cb(e.payload)),
   /** El usuario cerró la ventana de un plugin (id del efecto o `inst:<pista>`). */
   pluginEditorClosed: (cb: (slotId: string) => void): Promise<UnlistenFn> =>
     listen<string>('plugin-editor-closed', (e) => cb(e.payload)),

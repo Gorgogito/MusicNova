@@ -6,6 +6,7 @@ mod generate;
 mod i18n;
 mod instruments;
 mod live;
+mod updates;
 mod transcribe;
 mod worker;
 
@@ -299,7 +300,7 @@ fn plugin_errors(project: &Project) -> Vec<String> {
 
 /// Copia al proyecto el estado actual de sus plugins y lo guarda. Nunca
 /// espera al hilo principal con el cerrojo de la sesión tomado.
-fn sync_plugin_states(state: &AppState) -> Result<(), String> {
+pub(crate) fn sync_plugin_states(state: &AppState) -> Result<(), String> {
     let (mut effects, instruments): (Vec<EffectSlot>, Vec<(Uuid, mn_fx::PluginRef)>) = {
         let s = state.session.lock().unwrap();
         let Some(p) = s.project.as_ref() else { return Ok(()) };
@@ -1524,6 +1525,7 @@ fn spawn_transport_events(app: AppHandle) {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let (engine, engine_error) = match Engine::start() {
@@ -1620,6 +1622,8 @@ pub fn run() {
             plugins::plugin_param_set,
             plugins::plugin_restart,
             i18n::app_set_language,
+            updates::update_check,
+            updates::update_install,
             live::live_status,
             live::midi_open,
             live::live_arm,
