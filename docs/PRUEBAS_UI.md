@@ -72,8 +72,8 @@ ratón y el teclado sobre la aplicación en marcha:
 - «Sistema» decía «No se detectó GPU NVIDIA» mientras aún estaba consultando el
   equipo.
 
-Pendiente de probar con el ratón: grabación (necesita un micrófono), plugins con
-interfaz propia y masterización por referencia.
+Pendiente de probar con el ratón: grabación (necesita un micrófono) y plugins con
+interfaz propia.
 
 ## Uso real, 2026-11-05 (versión 0.1.0 instalada)
 
@@ -104,3 +104,18 @@ Comprobado en la aplicación: escribir 1k y 120 en «Graves · frec.», − / + 
 Ctrl + rueda por semitonos, flechas sin mover el cabezal, doble clic a 120 Hz, texto
 no válido marcado en rojo y Esc para cancelar, volumen de pista escrito a mano, y
 las cuatro formas de quitar el bucle.
+
+### Masterización por referencia (2026-11-05)
+
+Con «Britpop» y como referencia la mezcla original de otra canción (MP3):
+
+- «Elegir referencia…» (diálogo nativo), «Masterizar con referencia»: se añade la pista
+  «Máster · original» y aparece el selector A · Mezcla / B · Master, que alterna el solo de esa pista.
+- El progreso avanza por etapas (igualando la respuesta en frecuencia 50 %, corrigiendo 70 %,
+  guardando 95 %, cargando el master). Una pasada tarda unos 4,5 s.
+- Mejora: la primera vez tardó unos 25 s en importar Matchering y sus dependencias, sin ningún
+  mensaje nuevo. Ahora se muestra «cargando Matchering».
+- `scripts/file-dialog.ps1 -ExeUnder D:\ProjectsIA` solo toca los diálogos de la compilación de
+  desarrollo: así se puede probar con una MusicNova instalada abierta. El WebView2 de desarrollo
+  necesita además otra carpeta de datos (`WEBVIEW2_USER_DATA_FOLDER`): si comparte la carpeta
+  con la instalada y la abre con otros argumentos, falla con 0x8007139F.

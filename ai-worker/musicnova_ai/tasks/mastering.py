@@ -44,6 +44,8 @@ class MasterReferenceTask(Task):
         return True, ""
 
     def run(self, params: dict[str, Any], job: Job) -> dict[str, Any]:
+        # La primera importación tarda (numpy, scipy, resampy...): que se vea.
+        job.report(0.01, "cargando Matchering", force=True)
         import matchering as mg
 
         target = Path(params["target"])

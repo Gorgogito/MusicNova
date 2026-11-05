@@ -243,6 +243,7 @@ export const backendEn: Record<string, string> = {
   "analizando la referencia": "analyzing the reference",
   "igualando el nivel": "matching the level",
   "igualando la respuesta en frecuencia": "matching the frequency response",
+  "cargando Matchering": "loading Matchering",
   "corrigiendo": "correcting",
   "limitando": "limiting",
   "guardando": "saving",

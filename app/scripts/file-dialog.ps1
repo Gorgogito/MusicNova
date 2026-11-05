@@ -1,8 +1,10 @@
 # Rellena el diálogo nativo de abrir/guardar de MusicNova sin tocar el teclado
 # global: busca la ventana de diálogo (#32770) del proceso de MusicNova, escribe
 # la ruta en su cuadro de nombre con WM_SETTEXT y pulsa «Abrir/Guardar» (IDOK).
-# Uso: powershell -File file-dialog.ps1 -Path C:\ruta\archivo.wav [-TimeoutSec 10]
-param([Parameter(Mandatory)] [string] $Path, [int] $TimeoutSec = 10)
+# Uso: powershell -File file-dialog.ps1 -Path C:\ruta\archivo.wav [-TimeoutSec 10] [-ExeUnder D:\ProjectsIA]
+# -ExeUnder: solo los procesos cuyo ejecutable está bajo esa carpeta (p. ej. la
+# compilación de desarrollo, sin tocar una MusicNova instalada que esté abierta).
+param([Parameter(Mandatory)] [string] $Path, [int] $TimeoutSec = 10, [string] $ExeUnder = '')
 
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Text; using System.Collections.Generic;
@@ -31,7 +33,7 @@ public static class Dlg {
 "@
 
 $pids = New-Object 'System.Collections.Generic.HashSet[uint32]'
-Get-Process | Where-Object { $_.ProcessName -like 'musicnova*' } | ForEach-Object { [void]$pids.Add([uint32]$_.Id) }
+Get-Process | Where-Object { $_.ProcessName -like 'musicnova*' -and (-not $ExeUnder -or ($_.Path -and $_.Path.StartsWith($ExeUnder, [StringComparison]::OrdinalIgnoreCase))) } | ForEach-Object { [void]$pids.Add([uint32]$_.Id) }
 if ($pids.Count -eq 0) { throw 'MusicNova no está en marcha' }
 
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
