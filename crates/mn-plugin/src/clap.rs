@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events, clap_output_events,
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+    clap_event_header, clap_event_midi, clap_event_note, clap_event_param_value, clap_input_events, clap_output_events,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
 };
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS};
 use clap_sys::ext::gui::{clap_host_gui, clap_plugin_gui, clap_window, clap_window_handle, CLAP_EXT_GUI, CLAP_WINDOW_API_WIN32};
@@ -33,7 +33,7 @@ use clap_sys::process::clap_process;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::{clap_version_is_compatible, CLAP_VERSION};
 
-use crate::{NoteEvent, is_audio_thread, is_main_thread, on_main_async, Backend, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
+use crate::{EventKind, NoteEvent, is_audio_thread, is_main_thread, on_main_async, Backend, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
 
 /// Biblioteca CLAP cargada; se comparte entre instancias del mismo archivo y
 /// llama a `deinit` al soltarse.
@@ -290,6 +290,8 @@ struct AudioScratch {
     steady: i64,
     events: Vec<clap_event_param_value>,
     notes: Vec<clap_event_note>,
+    /// Rueda de tono, CC y aftertouch, como mensajes MIDI.
+    midi: Vec<clap_event_midi>,
     order: Vec<*const clap_event_header>,
     mono: Vec<f32>,
 }
@@ -374,7 +376,8 @@ impl ClapPlugin {
                     steady: 0,
                     events: Vec::with_capacity(1024),
                     notes: Vec::with_capacity(1024),
-                    order: Vec::with_capacity(2048),
+                    midi: Vec::with_capacity(1024),
+                    order: Vec::with_capacity(3072),
                     mono: vec![0.0; MAX_BLOCK],
                 }),
                 _lib: lib,
@@ -423,6 +426,20 @@ unsafe extern "C" fn istream_read(stream: *const clap_istream, buf: *mut c_void,
     ptr::copy_nonoverlapping(c.data[c.pos..].as_ptr(), buf as *mut u8, n);
     c.pos += n;
     n as i64
+}
+
+/// Mensaje MIDI (canal 1) de un gesto del teclado.
+pub(crate) fn midi_bytes(e: &NoteEvent) -> [u8; 3] {
+    let v7 = (e.velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+    match e.kind {
+        EventKind::PitchBend => {
+            let v = (((e.velocity.clamp(-1.0, 1.0) + 1.0) * 0.5) * 16383.0).round() as u16;
+            [0xE0, (v & 0x7F) as u8, (v >> 7) as u8]
+        }
+        EventKind::Control => [0xB0, e.key.min(127), v7],
+        EventKind::Pressure => [0xD0, v7, 0],
+        EventKind::Note => [if e.on { 0x90 } else { 0x80 }, e.key.min(127), v7],
+    }
 }
 
 impl Backend for ClapPlugin {
@@ -583,8 +600,22 @@ impl Backend for ClapPlugin {
             });
         }
         s.notes.clear();
+        s.midi.clear();
         if self.instrument {
-            for e in notes.iter().take(s.notes.capacity()) {
+            for e in notes.iter().filter(|e| e.kind != EventKind::Note).take(s.midi.capacity()) {
+                s.midi.push(clap_event_midi {
+                    header: clap_event_header {
+                        size: std::mem::size_of::<clap_event_midi>() as u32,
+                        time: e.time.min(n.saturating_sub(1) as u32),
+                        space_id: CLAP_CORE_EVENT_SPACE_ID,
+                        type_: CLAP_EVENT_MIDI,
+                        flags: 0,
+                    },
+                    port_index: 0,
+                    data: midi_bytes(e),
+                });
+            }
+            for e in notes.iter().filter(|e| e.kind == EventKind::Note).take(s.notes.capacity()) {
                 s.notes.push(clap_event_note {
                     header: clap_event_header {
                         size: std::mem::size_of::<clap_event_note>() as u32,
@@ -605,6 +636,7 @@ impl Backend for ClapPlugin {
         s.order.clear();
         s.order.extend(s.events.iter().map(|e| &e.header as *const clap_event_header));
         s.order.extend(s.notes.iter().map(|e| &e.header as *const clap_event_header));
+        s.order.extend(s.midi.iter().map(|e| &e.header as *const clap_event_header));
         s.order.sort_by_key(|&h| (*h).time);
         let in_events_data = InEvents(&s.order);
         let in_events = clap_input_events {

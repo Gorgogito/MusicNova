@@ -32,6 +32,8 @@ pub(crate) struct ShParam {
 pub(crate) struct ShNote {
     pub time: u32,
     pub key: u32,
+    /// [`EventKind`](crate::EventKind) como número.
+    pub kind: u32,
     pub velocity: f32,
     pub on: u32,
 }

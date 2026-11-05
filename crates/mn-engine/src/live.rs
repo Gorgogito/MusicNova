@@ -17,6 +17,12 @@ pub enum MidiMessage {
     Sustain(bool),
     /// Soltar todo (CC 120/123).
     AllNotesOff,
+    /// Rueda de tono, 0–16383 (8192 = centro).
+    PitchBend(u16),
+    /// Otro controlador (CC), 0–127.
+    Control { cc: u8, value: u8 },
+    /// Aftertouch de canal, 0–127.
+    Pressure(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

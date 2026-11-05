@@ -398,6 +398,19 @@ pub struct LiveNote {
     pub on: bool,
 }
 
+/// Gesto continuo de un teclado MIDI tocado en vivo (se aplica desde el bloque
+/// en que llega).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LiveControl {
+    /// Rueda de tono, de -1 a 1 (0 = centro). El instrumento decide el rango.
+    PitchBend(f32),
+    /// Controlador MIDI (rueda de modulación = 1, volumen = 7, expresión = 11...).
+    /// El pedal de sostenido y «soltar todo» los interpreta el motor.
+    Control { cc: u8, value: u8 },
+    /// Aftertouch de canal, 0–127.
+    Pressure(u8),
+}
+
 /// Instrumento que suena en tiempo real (teclado MIDI): el sintetizador
 /// integrado o un plugin instrumento. Nada de lo que hace reserva memoria.
 pub trait Instrument: Send {
@@ -406,6 +419,9 @@ pub trait Instrument: Send {
     fn render(&mut self, notes: &[LiveNote], buf: &mut [f32]);
     /// Suelta todas las notas (al desarmar la pista o pedirlo el teclado).
     fn all_notes_off(&mut self);
+    /// Rueda de tono, controladores y aftertouch: valen para el bloque
+    /// siguiente. Por defecto se ignoran.
+    fn control(&mut self, _c: LiveControl) {}
 }
 
 /// Crea el procesador de un efecto (reserva memoria: fuera del hilo de audio).

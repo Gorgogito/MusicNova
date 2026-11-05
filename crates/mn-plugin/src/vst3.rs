@@ -21,7 +21,7 @@ use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComRef, ComWrapper, Interface};
 
 use crate::scan::vst3_binary;
-use crate::{Backend, NoteEvent, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
+use crate::{Backend, EventKind, NoteEvent, ParamInfo, PluginDescriptor, PluginFormat, MAX_BLOCK};
 
 const AUDIO_MODULE_CLASS: &str = "Audio Module Class";
 
@@ -557,7 +557,8 @@ impl EventList {
     unsafe fn fill(&self, notes: &[NoteEvent], frames: usize) {
         let v = &mut *self.events.get();
         v.clear();
-        for n in notes.iter().take(v.capacity()) {
+        // Los gestos (rueda de tono, CC) no son eventos en VST3: van como parámetros.
+        for n in notes.iter().filter(|n| n.kind == EventKind::Note).take(v.capacity()) {
             let mut e: Event = std::mem::zeroed();
             e.busIndex = 0;
             e.sampleOffset = n.time.min(frames.saturating_sub(1) as u32) as int32;
@@ -593,6 +594,19 @@ impl IEventListTrait for EventList {
 }
 
 // ---- Instancia --------------------------------------------------------------------
+
+/// Tabla MIDI → parámetro del plugin (vacía si no implementa `IMidiMapping`).
+fn midi_map(controller: Option<&ComPtr<IEditController>>) -> [Option<u32>; 130] {
+    let mut map = [None; 130];
+    let Some(m) = controller.and_then(|c| c.cast::<IMidiMapping>()) else { return map };
+    for (ctrl, slot) in map.iter_mut().enumerate() {
+        let mut id: ParamID = 0;
+        if unsafe { m.getMidiControllerAssignment(0, 0, ctrl as CtrlNumber, &mut id) } == kResultOk {
+            *slot = Some(id);
+        }
+    }
+    map
+}
 
 /// Valores del anfitrión pendientes de reflejar en el controlador, sin reservar
 /// memoria ni bloquear en el hilo de audio.
@@ -664,6 +678,9 @@ pub(crate) struct Vst3Plugin {
     /// reflejarlo en el controlador y su interfaz. El hilo de audio solo escribe
     /// átomos; el principal los recoge en `idle`.
     reflect: Reflect,
+    /// Parámetro asignado a cada controlador MIDI (0–127 CC, 128 aftertouch,
+    /// 129 rueda de tono) según `IMidiMapping` del plugin.
+    midi_map: [Option<u32>; 130],
     separate_controller: bool,
     _host: ComWrapper<HostApp>,
     _handler: ComWrapper<Handler>,
@@ -829,6 +846,7 @@ impl Vst3Plugin {
         let (out_tx, out_rx) = rtrb::RingBuffer::new(1024);
         Self {
             reflect: Reflect::new(controller.as_ref()),
+            midi_map: midi_map(controller.as_ref()),
             out_rx: Mutex::new(out_rx),
             component,
             processor,
@@ -1066,6 +1084,18 @@ impl Backend for Vst3Plugin {
             s.changes.set(id, v);
             // El controlador (y la interfaz del plugin) lo verán en el próximo `idle`.
             self.reflect.set(id, v);
+        }
+        // Rueda de tono, CC y aftertouch: al parámetro que el plugin les asigna.
+        for e in notes.iter().filter(|e| e.kind != EventKind::Note) {
+            let (ctrl, v) = match e.kind {
+                EventKind::PitchBend => (ControllerNumbers_::kPitchBend as usize, ((e.velocity as f64 + 1.0) * 0.5).clamp(0.0, 1.0)),
+                EventKind::Pressure => (ControllerNumbers_::kAfterTouch as usize, e.velocity as f64),
+                _ => (e.key.min(127) as usize, e.velocity as f64),
+            };
+            if let Some(id) = self.midi_map[ctrl] {
+                s.changes.set(id, v);
+                self.reflect.set(id, v);
+            }
         }
         // Lo que el usuario mueve en la interfaz del plugin llega al procesador por aquí.
         while let Ok((id, v)) = s.edits.pop() {

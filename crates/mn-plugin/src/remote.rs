@@ -395,7 +395,7 @@ impl Backend for RemoteBackend {
         sh.n_params = np as u32;
         let nn = notes.len().min(MAX_EVENTS);
         for (d, e) in sh.notes.iter_mut().zip(&notes[..nn]) {
-            *d = ShNote { time: e.time, key: e.key as u32, velocity: e.velocity, on: e.on as u32 };
+            *d = ShNote { time: e.time, key: e.key as u32, kind: e.kind.to_u32(), velocity: e.velocity, on: e.on as u32 };
         }
         sh.n_notes = nn as u32;
         self.ev_req.set();

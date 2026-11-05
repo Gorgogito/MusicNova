@@ -368,7 +368,7 @@ struct GainController {
 }
 
 impl Class for GainController {
-    type Interfaces = (IEditController,);
+    type Interfaces = (IEditController, IMidiMapping);
 }
 
 impl GainController {
@@ -377,6 +377,18 @@ impl GainController {
     fn new() -> GainController {
         GainController {
             gain: Cell::new(1.0),
+        }
+    }
+}
+
+/// El volumen MIDI (CC 7) mueve la ganancia, como hacen muchos instrumentos.
+impl IMidiMappingTrait for GainController {
+    unsafe fn getMidiControllerAssignment(&self, bus: int32, _channel: int16, ctrl: CtrlNumber, id: *mut ParamID) -> tresult {
+        if bus == 0 && ctrl == 7 && !id.is_null() {
+            *id = 0;
+            kResultOk
+        } else {
+            kResultFalse
         }
     }
 }

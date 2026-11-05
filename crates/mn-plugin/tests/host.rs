@@ -331,6 +331,16 @@ fn check_live_plugin_instrument(r: &PluginRef, key: &str) {
     }
     let hz = out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (out.len() as f64 / rate as f64);
     assert!((hz - 440.0).abs() < 10.0, "{hz}");
+    // Rueda de tono arriba del todo: el sintetizador de prueba sube dos semitonos.
+    inst.control(mn_fx::LiveControl::PitchBend(1.0));
+    out.clear();
+    for _ in 0..20 {
+        inst.render(&[], &mut buf);
+        out.extend(buf.iter().step_by(2).copied());
+    }
+    let hz = out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (out.len() as f64 / rate as f64);
+    assert!((hz - 493.9).abs() < 10.0, "con la rueda de tono: {hz}");
+    inst.control(mn_fx::LiveControl::PitchBend(0.0));
     inst.all_notes_off();
     for _ in 0..4 {
         inst.render(&[], &mut buf);
@@ -378,4 +388,22 @@ fn vst3_controller_follows_automation() {
         drop(chain);
         retain_instances(|i| i != slot_id);
     }
+}
+
+/// VST3: el volumen MIDI (CC 7) llega al parámetro que el plugin le asigna con
+/// `IMidiMapping` (y al controlador); un CC sin asignar no hace nada.
+#[test]
+fn vst3_midi_controllers_use_the_plugin_mapping() {
+    use mn_fx::{Instrument, LiveControl};
+    let f = fixture();
+    let r = plugin_ref(&f.vst3, PluginFormat::Vst3);
+    let inst = Instance::load(&r, 48_000).unwrap();
+    let mut p = PluginProcessor::new(inst.clone());
+    assert_eq!(run(&mut p), 0.5);
+    p.control(LiveControl::Control { cc: 74, value: 0 });
+    assert_eq!(run(&mut p), 0.5, "CC 74 no está asignado");
+    p.control(LiveControl::Control { cc: 7, value: 127 });
+    p.control(LiveControl::Control { cc: 7, value: 0 });
+    assert_eq!(run(&mut p), 0.0, "CC 7 = 0: ganancia 0");
+    assert_eq!(inst.params()[0].value, 0.0, "el controlador lo refleja");
 }

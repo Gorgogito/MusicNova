@@ -41,6 +41,12 @@ pub fn parse_short(msg: u32) -> Option<MidiMessage> {
         0x90 | 0x80 => Some(MidiMessage::NoteOff { key: d1 }),
         0xB0 if d1 == 64 => Some(MidiMessage::Sustain(d2 >= 64)),
         0xB0 if d1 == 120 || d1 == 123 => Some(MidiMessage::AllNotesOff),
+        // «Reiniciar controladores»: la rueda de tono vuelve al centro.
+        0xB0 if d1 == 121 => Some(MidiMessage::PitchBend(8192)),
+        // 122 (control local) y 124–127 (modos) no son gestos musicales.
+        0xB0 if d1 < 120 => Some(MidiMessage::Control { cc: d1, value: d2 }),
+        0xE0 => Some(MidiMessage::PitchBend(((d2 as u16) << 7) | d1 as u16)),
+        0xD0 => Some(MidiMessage::Pressure(d1)),
         _ => None,
     }
 }
@@ -106,7 +112,14 @@ mod tests {
         assert_eq!(parse_short(0x00_7F_40_B0), Some(MidiMessage::Sustain(true)));
         assert_eq!(parse_short(0x00_00_40_B0), Some(MidiMessage::Sustain(false)));
         assert_eq!(parse_short(0x00_00_7B_B0), Some(MidiMessage::AllNotesOff));
-        assert_eq!(parse_short(0x00_00_10_E0), None, "pitch bend: aún no");
+        assert_eq!(parse_short(0x00_40_00_E0), Some(MidiMessage::PitchBend(8192)), "rueda de tono en el centro");
+        assert_eq!(parse_short(0x00_7F_7F_E1), Some(MidiMessage::PitchBend(16383)), "arriba del todo (canal 2)");
+        assert_eq!(parse_short(0x00_00_00_E0), Some(MidiMessage::PitchBend(0)));
+        assert_eq!(parse_short(0x00_50_01_B0), Some(MidiMessage::Control { cc: 1, value: 80 }), "rueda de modulación");
+        assert_eq!(parse_short(0x00_00_79_B0), Some(MidiMessage::PitchBend(8192)), "reiniciar controladores");
+        assert_eq!(parse_short(0x00_00_7C_B0), None, "modos de canal");
+        assert_eq!(parse_short(0x00_00_45_D0), Some(MidiMessage::Pressure(0x45)));
+        assert_eq!(parse_short(0x00_00_05_C0), None, "cambio de programa: no");
         // Enumerar no falla aunque no haya teclados conectados.
         let _ = midi_inputs();
     }

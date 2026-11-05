@@ -45,7 +45,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, ThreadId};
 
 use base64::Engine as _;
-use mn_fx::{EffectParams, EffectSlot, Instrument, LiveNote, PluginRef, Processor};
+use mn_fx::{EffectParams, EffectSlot, Instrument, LiveControl, LiveNote, PluginRef, Processor};
 use serde::{Deserialize, Serialize};
 
 pub use scan::{default_folders, find_candidates, scan_file};
@@ -124,7 +124,35 @@ pub struct ParamInfo {
     pub text: String,
 }
 
-/// Nota para un instrumento dentro de un bloque.
+/// Qué es un [`NoteEvent`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EventKind {
+    /// Nota: `key`, `velocity` (0–1) y `on`.
+    #[default]
+    Note,
+    /// Rueda de tono: `velocity` de -1 a 1.
+    PitchBend,
+    /// Controlador MIDI: `key` es su número y `velocity` su valor (0–1).
+    Control,
+    /// Aftertouch de canal: `velocity` de 0 a 1.
+    Pressure,
+}
+
+impl EventKind {
+    pub(crate) fn to_u32(self) -> u32 {
+        self as u32
+    }
+    pub(crate) fn from_u32(v: u32) -> Self {
+        match v {
+            1 => Self::PitchBend,
+            2 => Self::Control,
+            3 => Self::Pressure,
+            _ => Self::Note,
+        }
+    }
+}
+
+/// Nota (o gesto del teclado) para un instrumento dentro de un bloque.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoteEvent {
     /// Frame dentro del bloque.
@@ -133,6 +161,7 @@ pub struct NoteEvent {
     /// 0–1.
     pub velocity: f32,
     pub on: bool,
+    pub kind: EventKind,
 }
 
 /// Lo que cada formato debe ofrecer. Los métodos marcados «principal» solo se
@@ -557,7 +586,7 @@ impl Instrument for PluginProcessor {
             let key = n.key.min(127);
             let on = n.on && n.velocity > 0;
             self.held[key as usize] = on;
-            self.notes.push(NoteEvent { time: n.time.min(last), key, velocity: n.velocity as f32 / 127.0, on });
+            self.notes.push(NoteEvent { time: n.time.min(last), key, velocity: n.velocity as f32 / 127.0, on, kind: EventKind::Note });
         }
         buf.fill(0.0);
         self.process(buf);
@@ -566,9 +595,22 @@ impl Instrument for PluginProcessor {
     fn all_notes_off(&mut self) {
         for key in 0..128u8 {
             if std::mem::take(&mut self.held[key as usize]) && self.notes.len() < self.notes.capacity() {
-                self.notes.push(NoteEvent { time: 0, key, velocity: 0.0, on: false });
+                self.notes.push(NoteEvent { time: 0, key, velocity: 0.0, on: false, kind: EventKind::Note });
             }
         }
+    }
+
+    /// Rueda de tono, CC y aftertouch: al principio del bloque siguiente.
+    fn control(&mut self, c: LiveControl) {
+        if self.notes.len() >= self.notes.capacity() {
+            return;
+        }
+        let (kind, key, velocity) = match c {
+            LiveControl::PitchBend(b) => (EventKind::PitchBend, 0, b.clamp(-1.0, 1.0)),
+            LiveControl::Control { cc, value } => (EventKind::Control, cc.min(127), value.min(127) as f32 / 127.0),
+            LiveControl::Pressure(v) => (EventKind::Pressure, 0, v.min(127) as f32 / 127.0),
+        };
+        self.notes.push(NoteEvent { time: 0, key, velocity, on: false, kind });
     }
 }
 
@@ -629,8 +671,8 @@ pub fn render_instrument(plugin: &PluginRef, notes: &[RenderNote], sample_rate: 
     for &(start, end, key, vel) in notes {
         let a = (start.max(0.0) * sample_rate as f64).round() as usize;
         let b = ((end.max(start) * sample_rate as f64).round() as usize).max(a + 1);
-        events.push((a, NoteEvent { time: 0, key: key.min(127), velocity: vel.clamp(1, 127) as f32 / 127.0, on: true }));
-        events.push((b, NoteEvent { time: 0, key: key.min(127), velocity: 0.0, on: false }));
+        events.push((a, NoteEvent { time: 0, key: key.min(127), velocity: vel.clamp(1, 127) as f32 / 127.0, on: true, kind: EventKind::Note }));
+        events.push((b, NoteEvent { time: 0, key: key.min(127), velocity: 0.0, on: false, kind: EventKind::Note }));
     }
     events.sort_by_key(|(f, e)| (*f, e.on));
     let silence = vec![0.0f32; MAX_BLOCK];

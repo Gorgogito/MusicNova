@@ -326,6 +326,16 @@ fn check_live_plugin_instrument(r: &PluginRef, key: &str) {
     }
     let hz = out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (out.len() as f64 / rate as f64);
     assert!((hz - 440.0).abs() < 10.0, "{hz}");
+    // Rueda de tono arriba del todo: el sintetizador de prueba sube dos semitonos.
+    inst.control(mn_fx::LiveControl::PitchBend(1.0));
+    out.clear();
+    for _ in 0..20 {
+        inst.render(&[], &mut buf);
+        out.extend(buf.iter().step_by(2).copied());
+    }
+    let hz = out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 / (out.len() as f64 / rate as f64);
+    assert!((hz - 493.9).abs() < 10.0, "con la rueda de tono: {hz}");
+    inst.control(mn_fx::LiveControl::PitchBend(0.0));
     inst.all_notes_off();
     for _ in 0..4 {
         inst.render(&[], &mut buf);

@@ -1313,6 +1313,25 @@ mod tests {
     }
 
     #[test]
+    fn pitch_bend_reaches_the_live_instrument_and_is_not_recorded() {
+        let mut l = live_rt(mn_core::transcription::Timbre::Lead);
+        l.cmd.push(Command::SetMidiRecord(true)).ok().unwrap();
+        l.cmd.push(Command::Play).ok().unwrap();
+        press(&mut l, 69, 0);
+        block(&mut l, 4800);
+        assert!(l.rec.pop().is_ok(), "la nota sí se graba");
+        // Rueda arriba del todo (16383): +2 semitonos en el sintetizador integrado.
+        l.midi.push(MidiEvent { msg: MidiMessage::PitchBend(16383), time_ns: 0 }).unwrap();
+        block(&mut l, 960);
+        let hz = crossings_hz(&block(&mut l, 9600));
+        assert!((hz - 493.9).abs() < 15.0, "Si4 con la rueda: {hz} Hz");
+        assert!(l.rec.pop().is_err(), "los gestos no se graban como notas");
+        assert_eq!(rt::pitch_bend_amount(8192), 0.0);
+        assert_eq!(rt::pitch_bend_amount(0), -1.0);
+        assert_eq!(rt::pitch_bend_amount(16383), 1.0);
+    }
+
+    #[test]
     fn live_notes_are_recorded_where_they_were_heard() {
         let mut l = live_rt(mn_core::transcription::Timbre::Keys);
         l.cmd.push(Command::SetMidiRecord(true)).ok().unwrap();

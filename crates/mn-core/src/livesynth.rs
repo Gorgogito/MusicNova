@@ -5,12 +5,19 @@
 //! toca suena igual que la pista generada después con las notas grabadas.
 //! Las voces se reservan al crearlo: `render` no reserva memoria.
 
-use mn_fx::{Instrument, LiveNote};
+use mn_fx::{Instrument, LiveControl, LiveNote};
 
 use crate::transcription::Timbre;
 
 /// Voces simultáneas; al agotarse se reutiliza la más antigua.
 const VOICES: usize = 32;
+/// Rango de la rueda de tono (semitonos arriba y abajo), el habitual en MIDI.
+const BEND_RANGE: f32 = 2.0;
+/// Vibrato de la rueda de modulación (o del aftertouch) al máximo: semitonos y Hz.
+const VIBRATO_DEPTH: f32 = 0.5;
+const VIBRATO_HZ: f32 = 5.5;
+/// Suavizado de los gestos (s): sin escalones entre bloques.
+const SMOOTH: f32 = 0.005;
 
 #[derive(Clone, Copy, Default)]
 struct Voice {
@@ -48,6 +55,32 @@ pub struct LiveSynth {
     voices: [Voice; VOICES],
     serial: u64,
     noise: u32,
+    /// Gestos del teclado: objetivo y valor suavizado.
+    bend: Smooth,
+    vibrato: Smooth,
+    gain: Smooth,
+    modulation: f32,
+    pressure: f32,
+    volume: f32,
+    expression: f32,
+    vib_phase: f32,
+    smooth_k: f32,
+}
+
+#[derive(Clone, Copy)]
+struct Smooth {
+    target: f32,
+    value: f32,
+}
+
+impl Smooth {
+    const fn new(v: f32) -> Self {
+        Self { target: v, value: v }
+    }
+    fn step(&mut self, k: f32) -> f32 {
+        self.value += (self.target - self.value) * k;
+        self.value
+    }
 }
 
 /// Armónicos de cada timbre (los mismos que el render offline).
@@ -107,7 +140,27 @@ impl LiveSynth {
             voices: [Voice::default(); VOICES],
             serial: 0,
             noise: 0x9e37_79b9,
+            bend: Smooth::new(0.0),
+            vibrato: Smooth::new(0.0),
+            gain: Smooth::new(1.0),
+            modulation: 0.0,
+            pressure: 0.0,
+            volume: 1.0,
+            expression: 1.0,
+            vib_phase: 0.0,
+            smooth_k: 1.0 - (-1.0 / (SMOOTH * sr)).exp(),
         }
+    }
+
+    /// Multiplicador de frecuencia de esta muestra (rueda de tono y vibrato) y avance del vibrato.
+    fn pitch_factor(&mut self) -> f32 {
+        let k = self.smooth_k;
+        let bend = self.bend.step(k);
+        let depth = self.vibrato.step(k);
+        self.vib_phase = (self.vib_phase + VIBRATO_HZ / self.sr).fract();
+        let vib = if depth > 1e-4 { depth * VIBRATO_DEPTH * (std::f32::consts::TAU * self.vib_phase).sin() } else { 0.0 };
+        let semis = bend * BEND_RANGE + vib;
+        if semis == 0.0 { 1.0 } else { 2f32.powf(semis / 12.0) }
     }
 
     fn note_on(&mut self, key: u8, velocity: u8) {
@@ -147,8 +200,9 @@ impl LiveSynth {
         (x as f32 / u32::MAX as f32) * 2.0 - 1.0
     }
 
-    /// Una muestra de la voz `i` (y avanza su estado).
-    fn voice_sample(&mut self, i: usize) -> f32 {
+    /// Una muestra de la voz `i` (y avanza su estado). `pitch` multiplica la
+    /// frecuencia de las voces con tono (no la batería).
+    fn voice_sample(&mut self, i: usize, pitch: f32) -> f32 {
         let sr = self.sr;
         if let Some(d) = self.voices[i].drum {
             let v = self.voices[i];
@@ -192,7 +246,7 @@ impl LiveSynth {
         if let Some(r) = v.released {
             env *= 1.0 - (k - r) as f32 / rel.max(1) as f32;
         }
-        v.phase += (v.f0 / sr) as f64;
+        v.phase += (v.f0 * pitch / sr) as f64;
         let ph = (v.phase.fract() as f32) * std::f32::consts::TAU;
         let mut s = 0.0;
         for (h, &w) in harmonics.iter().enumerate() {
@@ -220,12 +274,15 @@ impl Instrument for LiveSynth {
                 }
                 next += 1;
             }
+            let pitch = self.pitch_factor();
+            let gain = self.gain.step(self.smooth_k);
             let mut s = 0.0;
             for i in 0..VOICES {
                 if self.voices[i].active {
-                    s += self.voice_sample(i);
+                    s += self.voice_sample(i, pitch);
                 }
             }
+            s *= gain;
             buf[f * 2] = s;
             buf[f * 2 + 1] = s;
         }
@@ -243,6 +300,22 @@ impl Instrument for LiveSynth {
         for v in self.voices.iter_mut().filter(|v| v.active && v.released.is_none()) {
             v.released = Some(v.k);
         }
+    }
+
+    /// Rueda de tono (±2 semitonos), modulación y aftertouch (vibrato), volumen
+    /// (CC 7) y expresión (CC 11). La pista generada con las notas grabadas no
+    /// los incluye.
+    fn control(&mut self, c: LiveControl) {
+        match c {
+            LiveControl::PitchBend(b) => self.bend.target = b.clamp(-1.0, 1.0),
+            LiveControl::Control { cc: 1, value } => self.modulation = value as f32 / 127.0,
+            LiveControl::Control { cc: 7, value } => self.volume = (value as f32 / 127.0).powi(2),
+            LiveControl::Control { cc: 11, value } => self.expression = (value as f32 / 127.0).powi(2),
+            LiveControl::Pressure(v) => self.pressure = v as f32 / 127.0,
+            LiveControl::Control { .. } => {}
+        }
+        self.vibrato.target = self.modulation.max(self.pressure);
+        self.gain.target = self.volume * self.expression;
     }
 }
 
@@ -310,5 +383,51 @@ mod tests {
         let mut tail = vec![0.0f32; 2 * rate as usize];
         synth.render(&[], &mut tail);
         assert!(tail[tail.len() - 200..].iter().all(|&s| s == 0.0), "todo se apaga tras la liberación");
+    }
+
+    /// Frecuencia por cruces por cero ascendentes del canal izquierdo.
+    fn hz(buf: &[f32], rate: u32) -> f64 {
+        let left: Vec<f32> = buf.iter().step_by(2).copied().collect();
+        left.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64 * rate as f64 / left.len() as f64
+    }
+
+    #[test]
+    fn pitch_bend_modulation_and_volume() {
+        let rate = 48_000;
+        let mut synth = LiveSynth::new(Timbre::Lead, rate);
+        let mut buf = vec![0.0f32; rate as usize]; // medio segundo
+        synth.render(&[LiveNote { time: 0, key: 69, velocity: 100, on: true }], &mut buf);
+        let base = hz(&buf, rate);
+        assert!((base - 440.0).abs() < 5.0, "{base}");
+
+        // Rueda arriba del todo: dos semitonos (Si4).
+        synth.control(LiveControl::PitchBend(1.0));
+        synth.render(&[], &mut buf); // el suavizado llega en unos milisegundos
+        synth.render(&[], &mut buf);
+        let up = hz(&buf, rate);
+        assert!((up - 493.9).abs() < 5.0, "{up}");
+        synth.control(LiveControl::PitchBend(-1.0));
+        synth.render(&[], &mut buf);
+        synth.render(&[], &mut buf);
+        let down = hz(&buf, rate);
+        assert!((down - 392.0).abs() < 5.0, "{down}");
+        synth.control(LiveControl::PitchBend(0.0));
+
+        // Rueda de modulación: vibrato (la frecuencia varía entre ventanas cortas).
+        synth.control(LiveControl::Control { cc: 1, value: 127 });
+        synth.render(&[], &mut buf);
+        let win = 2 * 2400; // 50 ms
+        let rates: Vec<f64> = buf.chunks(win).map(|c| hz(c, rate)).collect();
+        let (lo, hi) = rates.iter().fold((f64::MAX, 0.0f64), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(hi - lo > 15.0, "vibrato: {lo}–{hi}");
+        synth.control(LiveControl::Control { cc: 1, value: 0 });
+
+        // Volumen a cero: silencio; otros CC no hacen nada.
+        synth.control(LiveControl::Control { cc: 74, value: 0 });
+        synth.render(&[], &mut buf);
+        assert!(buf.iter().any(|s| s.abs() > 0.01), "CC 74 no silencia");
+        synth.control(LiveControl::Control { cc: 7, value: 0 });
+        synth.render(&[], &mut buf);
+        assert!(buf[buf.len() / 2..].iter().all(|s| s.abs() < 1e-4), "CC 7 = 0 silencia");
     }
 }

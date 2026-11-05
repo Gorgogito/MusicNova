@@ -150,6 +150,7 @@ fn audio_loop(inst: Arc<Instance>, shm: Shm, ev_req: Event, ev_done: Event, stop
                 key: e.key.min(127) as u8,
                 velocity: e.velocity,
                 on: e.on != 0,
+                kind: crate::EventKind::from_u32(e.kind),
             }));
             let input = &(*sh).input;
             let output = &mut (*sh).output;

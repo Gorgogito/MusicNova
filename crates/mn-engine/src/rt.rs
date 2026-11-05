@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cpal::{FromSample, SizedSample};
 use mn_fx::loudness::LoudnessMeter;
-use mn_fx::{Chain, Instrument, LiveNote};
+use mn_fx::{Chain, Instrument, LiveControl, LiveNote};
 use mn_stretch::Stretch;
 
 use crate::click::Clicks;
@@ -273,7 +273,17 @@ impl RtState {
                         l.all_notes_off();
                     }
                 }
+                MidiMessage::PitchBend(v) => self.live_control(LiveControl::PitchBend(pitch_bend_amount(v))),
+                MidiMessage::Control { cc, value } => self.live_control(LiveControl::Control { cc: cc.min(127), value: value.min(127) }),
+                MidiMessage::Pressure(v) => self.live_control(LiveControl::Pressure(v.min(127))),
             }
+        }
+    }
+
+    /// Gestos continuos: van directos al instrumento armado (no se graban).
+    fn live_control(&mut self, c: LiveControl) {
+        if let Some(l) = self.live.as_deref_mut() {
+            l.control(c);
         }
     }
 
@@ -886,4 +896,10 @@ impl RtState {
         sh.lufs_m.store(self.meter.momentary().to_bits(), Ordering::Relaxed);
         sh.lufs_s.store(self.meter.short_term().to_bits(), Ordering::Relaxed);
     }
+}
+
+/// Rueda de tono MIDI (0–16383, 8192 = centro) → -1…1, con los extremos exactos.
+pub(crate) fn pitch_bend_amount(v: u16) -> f32 {
+    let d = v.min(16383) as f32 - 8192.0;
+    if d >= 0.0 { d / 8191.0 } else { d / 8192.0 }
 }

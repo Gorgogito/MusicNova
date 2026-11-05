@@ -78,12 +78,31 @@ segundo mientras la ventana del plugin está abierta (temporizador de la ventana
 leen los parámetros. Prueba `vst3_controller_follows_automation`; el plugin VST3 de prueba ya no
 repite como salida los cambios que recibe, que ocultaba el fallo.
 
+## Rueda de tono, controladores y aftertouch en vivo
+
+Al tocar con un teclado MIDI, además de las notas, el pedal y «soltar todo», llegan al instrumento
+armado la rueda de tono (0xE0), los controladores (CC 0–119; 121 devuelve la rueda al centro) y el
+aftertouch de canal (0xD0), desde el bloque siguiente:
+
+- **Sintetizador integrado:** rueda de tono ±2 semitonos; rueda de modulación (CC 1) y aftertouch:
+  vibrato de hasta ±0,5 semitonos a 5,5 Hz; volumen (CC 7) y expresión (CC 11). Todo suavizado
+  (5 ms), sin escalones. La batería no cambia de tono.
+- **Plugins CLAP:** como mensajes MIDI (`CLAP_EVENT_MIDI`) en su puerto de notas. El plugin decide
+  el rango de la rueda y qué hace cada CC.
+- **Plugins VST3:** no tienen eventos de este tipo. Se consulta una vez su `IMidiMapping`
+  (CC 0–127, aftertouch y rueda) y cada gesto se envía como cambio del parámetro asignado; también
+  se refleja en su controlador. Los gestos sin parámetro asignado se ignoran.
+
+Pruebas: `pitch_bend_modulation_and_volume` (sintetizador), `pitch_bend_reaches_the_live_instrument_and_is_not_recorded`
+(motor), la rueda de tono en `check_live_plugin_instrument` (CLAP, en este proceso y en otro) y
+`vst3_midi_controllers_use_the_plugin_mapping` (CC 7 → ganancia del VST3 de prueba).
+
 ## Limitaciones conocidas
 
 - `request_restart` de CLAP y `restartComponent` de VST3 no reinician el plugin. Ninguno de los
   probados lo necesitó.
-- En vivo solo se leen notas, el pedal de sostenido y «soltar todo»: pitch bend, aftertouch y
-  otros controladores MIDI se ignoran.
+- Los gestos del teclado en vivo (rueda de tono, CC, aftertouch) no se graban: al grabar solo
+  quedan las notas.
 
 ## Cada plugin en su propio proceso
 
