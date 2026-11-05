@@ -87,11 +87,15 @@ fn clap_processes_params_and_state() {
     let params = inst.params();
     assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["Ganancia", "Invertir"]);
     assert!(params[1].stepped);
+    assert_eq!((params[0].steps, params[1].steps), (0, 1));
 
     inst.set_param(0, -6.0);
     let v = run(&mut p);
     assert!((v - 0.5 * 0.501_187).abs() < 1e-4, "{v}");
     assert_eq!(inst.params()[0].text, "-6.0 dB");
+    assert_eq!(inst.param_from_text(0, "-3,5 dB"), Some(-3.5), "texto escrito por el usuario");
+    assert_eq!(inst.param_from_text(1, "Sí"), Some(1.0));
+    assert_eq!(inst.param_from_text(0, "mucho"), None);
     inst.set_param(1, 1.0);
     assert!(run(&mut p) < 0.0, "fase invertida");
 
@@ -119,6 +123,8 @@ fn vst3_processes_params_and_state() {
         inst.set_param(params[0].id, 0.25);
         assert_eq!(run(&mut p), 0.125);
         assert_eq!(inst.params()[0].value, 0.25, "el controlador refleja el cambio");
+        assert_eq!(inst.param_from_text(params[0].id, "0.75"), Some(0.75));
+        assert_eq!(inst.param_from_text(params[0].id, "x"), None);
 
         // Estado: componente + controlador.
         let mut saved = r.clone();

@@ -117,6 +117,9 @@ pub struct ParamInfo {
     pub default: f64,
     pub value: f64,
     pub stepped: bool,
+    /// Número de pasos entre `min` y `max` si es escalonado (0: continuo).
+    #[serde(default)]
+    pub steps: u32,
     /// Valor actual como lo muestra el plugin ("-6,0 dB").
     pub text: String,
 }
@@ -140,6 +143,11 @@ pub(crate) trait Backend: Send + Sync {
     /// Principal: valor que se acaba de fijar desde la interfaz genérica (VST3
     /// lo refleja en su controlador; CLAP lo recibe en el siguiente proceso).
     fn param_set_from_host(&self, _id: u32, _value: f64) {}
+    /// Principal: valor que corresponde a un texto escrito por el usuario
+    /// («-6 dB», «1,5 kHz»), según el propio plugin. `None`: no lo entiende.
+    fn param_from_text(&self, _id: u32, _text: &str) -> Option<f64> {
+        None
+    }
     /// Principal.
     fn save_state(&self) -> Option<Vec<u8>>;
     /// Principal.
@@ -351,6 +359,13 @@ impl Instance {
 
     pub fn params(&self) -> Vec<ParamInfo> {
         self.call(|b| b.params())
+    }
+
+    /// Convierte un texto («-6 dB») en el valor del parámetro, con las reglas del
+    /// propio plugin (CLAP `text_to_value`, VST3 `getParamValueByString`).
+    pub fn param_from_text(&self, id: u32, text: &str) -> Option<f64> {
+        let text = text.to_string();
+        self.call(move |b| b.param_from_text(id, &text))
     }
 
     /// Cambia un parámetro; llega al plugin en el siguiente bloque de audio.

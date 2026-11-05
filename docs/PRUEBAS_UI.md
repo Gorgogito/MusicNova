@@ -74,3 +74,33 @@ ratón y el teclado sobre la aplicación en marcha:
 
 Pendiente de probar con el ratón: grabación (necesita un micrófono), plugins con
 interfaz propia y masterización por referencia.
+
+## Uso real, 2026-11-05 (versión 0.1.0 instalada)
+
+Dos problemas de uso detectados al trabajar con la aplicación:
+
+- **Los deslizadores de los efectos eran imprecisos.** Tenían 1000 posiciones en
+  unos 100 píxeles, y en frecuencias cada píxel saltaba 10–20 Hz: volver a 120 Hz
+  después de subir a 1 kHz era casi imposible. Todos los parámetros (efectos,
+  plugins, volumen y panorama de pista, ganancia del máster) usan ahora un control
+  común (`ParamControl`):
+  - clic en el valor para escribirlo: «120», «1.5k», «1,2 kHz», «-3 dB», «25 %»,
+    «1.5 s», «apagado», «I30» o «D50» en el panorama, o el texto que entienda el
+    plugin («-6 dB»), mediante `text_to_value` de CLAP y `getParamValueByString`
+    de VST3;
+  - botones − / + (no aparecen en las cabeceras de pista, por falta de sitio).
+    En frecuencias el paso es un semitono (con Shift, una octava); en otras
+    escalas logarítmicas, el 1 % del recorrido; en las lineales, su paso. Si se
+    mantienen pulsados, se repiten cada vez más rápido;
+  - Shift al arrastrar: diez veces más lento. Doble clic: valor por defecto;
+  - flechas, Re Pág / Av Pág, Inicio / Fin con el foco. Ya no mueven además el cabezal;
+  - Ctrl + rueda: paso a paso. Sin Ctrl, la rueda desplaza el panel.
+- **El bucle creado al arrastrar sobre la regla no se podía quitar** (solo
+  desactivar en Práctica). Ahora se quita con la × de la regla, con Esc en el
+  estudio (si no hay ningún clip seleccionado), con doble clic dentro del bucle en
+  la regla o con «Quitar» en Práctica.
+
+Comprobado en la aplicación: escribir 1k y 120 en «Graves · frec.», − / + y
+Ctrl + rueda por semitonos, flechas sin mover el cabezal, doble clic a 120 Hz, texto
+no válido marcado en rojo y Esc para cancelar, volumen de pista escrito a mano, y
+las cuatro formas de quitar el bucle.

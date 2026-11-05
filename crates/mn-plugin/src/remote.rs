@@ -306,6 +306,13 @@ impl Backend for RemoteBackend {
         self.send(Request::SetParam { id, value });
     }
 
+    fn param_from_text(&self, id: u32, text: &str) -> Option<f64> {
+        match self.request(Request::ParamFromText { id, text: text.to_string() }, CONTROL_TIMEOUT) {
+            Ok(Reply::Value(v)) => v,
+            _ => None,
+        }
+    }
+
     fn save_state(&self) -> Option<Vec<u8>> {
         match self.request(Request::SaveState, CONTROL_TIMEOUT) {
             Ok(Reply::State(Some(s))) => base64::engine::general_purpose::STANDARD.decode(s).ok(),

@@ -1620,6 +1620,7 @@ pub fn run() {
             plugins::plugin_open_editor,
             plugins::plugin_params,
             plugins::plugin_param_set,
+            plugins::plugin_param_parse,
             plugins::plugin_restart,
             i18n::app_set_language,
             updates::update_check,

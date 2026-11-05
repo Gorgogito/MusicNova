@@ -2,6 +2,8 @@ import type { EffectSlot, MasterSettings, TrackView } from '../lib/api'
 import { EFFECT_LABELS } from '../lib/effects'
 import { TRACK_KINDS } from '../lib/tracks'
 import { EffectRack } from './EffectRack'
+import { ParamControl } from './ParamControl'
+import { MASTER_GAIN_SPEC } from '../lib/param'
 import { tr } from '../i18n'
 
 interface Props {
@@ -89,19 +91,10 @@ export function MixPanel({ tracks, master, selected, lufs, onSelect, onTrackEffe
                   ))}
                 </div>
               </div>
-              <label className="fx-control master-gain">
+              <div className="fx-control master-gain">
                 <span className="small muted">{tr('Ganancia máster')}</span>
-                <input
-                  type="range"
-                  min={-24}
-                  max={12}
-                  step={0.5}
-                  value={master.gain_db}
-                  onChange={(e) => onMasterGain(Number(e.target.value))}
-                  onDoubleClick={() => onMasterGain(0)}
-                />
-                <span className="small mono">{master.gain_db.toFixed(1)} dB</span>
-              </label>
+                <ParamControl spec={MASTER_GAIN_SPEC} value={master.gain_db} label={tr('Ganancia máster')} onChange={onMasterGain} />
+              </div>
             </div>
             <p className="small muted">
               {tr('Efectos del máster: se aplican a la mezcla completa después del cambio de tempo y tono. Un limitador al final evita la saturación al exportar.')}

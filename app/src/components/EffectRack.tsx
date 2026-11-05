@@ -1,16 +1,7 @@
 import type { EffectSlot, EffectType } from '../lib/api'
-import {
-  CONTROLS,
-  EFFECT_LABELS,
-  EFFECT_ORDER,
-  formatValue,
-  fromSlider,
-  getParam,
-  newSlot,
-  setParam,
-  toSlider,
-} from '../lib/effects'
+import { CONTROLS, EFFECT_LABELS, EFFECT_ORDER, controlSpec, defaultParams, getParam, newSlot, setParam } from '../lib/effects'
 import { Icon } from './Icon'
+import { ParamControl } from './ParamControl'
 import { PluginControls } from './PluginControls'
 import { FORMAT_LABEL, pluginSlot, usePlugins } from '../lib/plugins'
 import { tr } from '../i18n'
@@ -76,17 +67,15 @@ ${plugin.path}` : ''}>
               {CONTROLS[type].map((c) => {
                 const v = getParam(slot.params, c.path)
                 return (
-                  <label key={c.path} className="fx-control">
+                  <div key={c.path} className="fx-control">
                     <span className="small muted">{c.label}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1000}
-                      value={toSlider(c, v)}
-                      onChange={(e) => update(i, { ...slot, params: setParam(slot.params, c.path, fromSlider(c, Number(e.target.value))) })}
+                    <ParamControl
+                      spec={controlSpec(c, getParam(defaultParams(type), c.path))}
+                      value={v}
+                      label={c.label}
+                      onChange={(x) => update(i, { ...slot, params: setParam(slot.params, c.path, x) })}
                     />
-                    <span className="small mono">{formatValue(c, v)}</span>
-                  </label>
+                  </div>
                 )
               })}
               {delay && (

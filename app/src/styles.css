@@ -438,7 +438,7 @@ nav {
 .lane-slider {
   grid-column: 2 / 4;
   display: grid;
-  grid-template-columns: 28px 1fr 36px;
+  grid-template-columns: 28px 1fr;
   align-items: center;
   gap: 8px;
 }
@@ -1334,12 +1334,12 @@ select.compact {
 }
 .fx-controls {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 6px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 6px 20px;
 }
 .fx-control {
   display: grid;
-  grid-template-columns: 110px 1fr 74px;
+  grid-template-columns: 104px 1fr;
   align-items: center;
   gap: 8px;
 }
@@ -1353,12 +1353,12 @@ select.compact {
 }
 .master-strip {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 1fr 400px;
   gap: 16px;
   align-items: center;
 }
 .master-gain {
-  grid-template-columns: 110px 1fr 64px;
+  grid-template-columns: 110px 1fr;
 }
 .lufs {
   display: flex;
@@ -1996,4 +1996,160 @@ input.num.wide {
   overflow: auto;
   white-space: pre-wrap;
   margin: 6px 0;
+}
+
+/* ---------- Control de parámetro (deslizador + valor editable + − / +) ---------- */
+.param {
+  display: grid;
+  grid-template-columns: minmax(60px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.param-slider {
+  position: relative;
+  height: 22px;
+  cursor: pointer;
+  touch-action: none;
+  border-radius: 4px;
+  outline: none;
+}
+.param-slider:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-2);
+}
+.param-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.param-fill {
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.55;
+}
+.param-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  transition: transform 0.08s;
+}
+.param-slider:hover .param-thumb,
+.param-slider.dragging .param-thumb {
+  transform: scale(1.2);
+}
+.param-slider:focus-visible .param-thumb {
+  background: var(--accent);
+}
+.param-value {
+  display: grid;
+  grid-template-columns: auto 72px auto;
+  align-items: center;
+  gap: 2px;
+}
+.param.compact .param-value {
+  grid-template-columns: 52px;
+}
+.param-step {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1;
+  user-select: none;
+}
+.param-step:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.param-step:active:not(:disabled) {
+  background: var(--accent);
+  color: #06201b;
+}
+.param-step:disabled {
+  opacity: 0.35;
+}
+.param-text,
+.param-input {
+  width: 100%;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.param-text {
+  cursor: text;
+}
+.param-text:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--bg-elev-2);
+}
+.param-input {
+  border-color: var(--accent);
+  background: var(--bg);
+  outline: none;
+}
+.param-input.invalid {
+  border-color: var(--danger);
+}
+.param.disabled .param-slider {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* Bucle en la regla, con su botón para quitarlo. */
+.ruler-loop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(139, 123, 255, 0.12);
+  border-left: 1px dashed rgba(139, 123, 255, 0.6);
+  border-right: 1px dashed rgba(139, 123, 255, 0.6);
+  pointer-events: none;
+}
+.ruler-loop.on {
+  background: rgba(139, 123, 255, 0.28);
+  border-color: var(--accent-2);
+  border-style: solid;
+}
+.ruler-loop-clear {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-2);
+  color: #0b0d12;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 18px;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 2;
+}
+.ruler-loop-clear:hover {
+  background: var(--danger);
 }

@@ -195,6 +195,7 @@ fn handle(req: Request) -> Result<Reply, String> {
             i.backend().param_set_from_host(id, value);
             Ok(Reply::Done)
         }),
+        Request::ParamFromText { id, text } => with_inst(|i| Ok(Reply::Value(i.backend().param_from_text(id, &text)))),
         Request::SaveState => with_inst(|i| Ok(Reply::State(i.state_base64()))),
         Request::LoadState { data } => with_inst(|i| {
             let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;

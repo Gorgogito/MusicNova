@@ -457,11 +457,25 @@ impl Backend for ClapPlugin {
                     default: info.default_value,
                     value,
                     stepped: info.flags & CLAP_PARAM_IS_STEPPED != 0,
+                    // En CLAP los escalonados toman valores enteros.
+                    steps: if info.flags & CLAP_PARAM_IS_STEPPED != 0 {
+                        (info.max_value - info.min_value).round().clamp(0.0, u32::MAX as f64) as u32
+                    } else {
+                        0
+                    },
                     text,
                 });
             }
         }
         out
+    }
+
+    fn param_from_text(&self, id: u32, text: &str) -> Option<f64> {
+        let p = self.params?;
+        let f = p.text_to_value?;
+        let text = CString::new(text).ok()?;
+        let mut value = 0.0;
+        unsafe { f(self.plugin, id, text.as_ptr(), &mut value) }.then_some(value).filter(|v| v.is_finite())
     }
 
     fn save_state(&self) -> Option<Vec<u8>> {

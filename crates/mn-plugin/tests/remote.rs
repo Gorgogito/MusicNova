@@ -90,6 +90,8 @@ fn effects_run_in_another_process_like_in_this_one() {
     inst.set_param(0, -6.0);
     assert!((run(&mut p) - MINUS_6_DB).abs() < 1e-5);
     assert!(wait_until(Duration::from_secs(2), || inst.params()[0].value == -6.0), "el plugin refleja el valor");
+    assert_eq!(inst.param_from_text(0, "-12 dB"), Some(-12.0), "el texto se convierte en el otro proceso");
+    assert_eq!(inst.param_from_text(0, "?"), None);
 
     // El estado viaja por el proceso: una instancia nueva arranca a -6 dB.
     let state = inst.state_base64().expect("estado");

@@ -128,7 +128,17 @@ export function PracticePanel({ practice: p, position, duration, onChange, onSee
             B
           </button>
         </div>
-        <span className="small muted">{tr('También puedes arrastrar sobre la regla.')}</span>
+        <div className="panel-row">
+          <span className="small muted">{tr('También puedes arrastrar sobre la regla.')}</span>
+          <button
+            className="link small"
+            title={tr('Quitar el bucle (Esc en el estudio)')}
+            disabled={p.loop_end <= p.loop_start}
+            onClick={() => onChange({ loop_enabled: false, loop_start: 0, loop_end: 0 })}
+          >
+            {tr('Quitar')}
+          </button>
+        </div>
       </section>
 
       <section className="practice-group">

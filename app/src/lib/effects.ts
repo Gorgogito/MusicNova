@@ -2,6 +2,7 @@
 // controles. Los rangos coinciden con `EffectParams::sanitized` (crates/mn-fx).
 import type { EffectParams, EffectSlot, EffectType } from './api'
 import { tr } from '../i18n'
+import { clamp01, parseNumber, roundTo, type ParamSpec } from './param'
 
 export const EFFECT_LABELS: Record<EffectType, string> = {
   eq: tr('Ecualizador'),
@@ -112,22 +113,75 @@ export function setParam(p: EffectParams, path: string, value: number): EffectPa
   return { ...obj, [a]: { ...(obj[a] as Record<string, number>), [b]: value } } as unknown as EffectParams
 }
 
-/** Posición del deslizador (0–1000) ↔ valor, con escala lineal o logarítmica. */
-export function toSlider(c: Control, v: number): number {
+/** Con `offAtZero`, el primer tramo del deslizador es «apagado» y el resto, min…max. */
+const OFF_ZONE = 0.03
+
+/** Valor → posición del deslizador (0–1), con escala lineal o logarítmica. */
+export function toNorm(c: Control, v: number): number {
   if (c.offAtZero && v <= 0) return 0
-  const x = c.log ? Math.log(v / c.min) / Math.log(c.max / c.min) : (v - c.min) / (c.max - c.min)
-  return Math.round(Math.max(0, Math.min(1, x)) * 1000)
+  const x = clamp01(c.log ? Math.log(v / c.min) / Math.log(c.max / c.min) : (v - c.min) / (c.max - c.min))
+  return c.offAtZero ? OFF_ZONE + x * (1 - OFF_ZONE) : x
 }
 
-export function fromSlider(c: Control, s: number): number {
-  if (c.offAtZero && s === 0) return 0
-  const x = s / 1000
+/** Posición del deslizador (0–1) → valor redondeado a su paso. */
+export function fromNorm(c: Control, n: number): number {
+  let x = clamp01(n)
+  if (c.offAtZero) {
+    if (x < OFF_ZONE / 2) return 0
+    x = clamp01((x - OFF_ZONE) / (1 - OFF_ZONE))
+  }
   const v = c.log ? c.min * Math.pow(c.max / c.min, x) : c.min + x * (c.max - c.min)
-  return Math.round(v / c.step) * c.step
+  return fit(c, v)
+}
+
+const fit = (c: Control, v: number) => roundTo(Math.max(c.min, Math.min(c.max, v)), c.step)
+
+/**
+ * Un paso arriba o abajo. Frecuencias: un semitono (Shift: una octava), para que
+ * pocos clics recorran todo el rango. Otras escalas logarítmicas: 1 % del
+ * recorrido (Shift: 10 %). Lineales: su paso (Shift: diez pasos).
+ */
+export function nudgeValue(c: Control, v: number, dir: 1 | -1, big: boolean): number {
+  if (c.offAtZero && v <= 0) return dir > 0 ? c.min : 0
+  if (c.offAtZero && dir < 0 && v <= c.min) return 0
+  let next: number
+  if (c.log && c.unit === 'Hz') next = v * Math.pow(2, (dir * (big ? 12 : 1)) / 12)
+  else if (c.log) next = fromNorm(c, toNorm(c, v) + dir * (big ? 0.1 : 0.01))
+  else next = v + dir * c.step * (big ? 10 : 1)
+  next = fit(c, next)
+  // El redondeo no debe dejarlo quieto.
+  if (next === v) next = fit(c, v + dir * c.step)
+  return next
+}
+
+/** Lee lo que escribe el usuario: «120», «1.5k», «1,2 kHz», «-3 dB», «25 %», «1.5 s», «apagado». */
+export function parseValue(c: Control, text: string): number | null {
+  const t = text.trim().toLowerCase()
+  if (c.offAtZero && ['', 'off', 'apagado', tr('apagado').toLowerCase()].includes(t)) return 0
+  let v = parseNumber(t)
+  if (v == null) return null
+  if (c.percent) v /= 100
+  else if (c.unit === 'ms' && /\ds$|\d\s+s$|\dseg/.test(t)) v *= 1000
+  if (c.offAtZero && v <= 0) return 0
+  return fit(c, v)
+}
+
+/** Lo que necesita <ParamControl> para un control de efecto. */
+export function controlSpec(c: Control, def: number): ParamSpec {
+  return {
+    min: c.offAtZero ? 0 : c.min,
+    max: c.max,
+    def,
+    toNorm: (v) => toNorm(c, v),
+    fromNorm: (n) => fromNorm(c, n),
+    nudge: (v, dir, big) => nudgeValue(c, v, dir, big),
+    format: (v) => formatValue(c, v),
+    parse: (text) => parseValue(c, text),
+  }
 }
 
 export function formatValue(c: Control, v: number): string {
-  if (c.offAtZero && v <= 0) return 'apagado'
+  if (c.offAtZero && v <= 0) return tr('apagado')
   if (c.percent) return `${Math.round(v * 100)} %`
   if (c.unit === 'Hz' && v >= 1000) return `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)} kHz`
   const digits = c.step >= 1 ? 0 : c.step >= 0.1 ? 1 : 2

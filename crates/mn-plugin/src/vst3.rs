@@ -887,11 +887,21 @@ impl Backend for Vst3Plugin {
                     default: info.defaultNormalizedValue,
                     value,
                     stepped: info.stepCount > 0,
+                    steps: info.stepCount.max(0) as u32,
                     text,
                 });
             }
         }
         out
+    }
+
+    fn param_from_text(&self, id: u32, text: &str) -> Option<f64> {
+        let c = self.controller.as_ref()?;
+        let mut wide: Vec<TChar> = text.encode_utf16().map(|u| u as TChar).collect();
+        wide.push(0);
+        let mut value = 0.0;
+        let ok = unsafe { c.getParamValueByString(id, wide.as_mut_ptr(), &mut value) } == kResultOk;
+        ok.then_some(value).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
     }
 
     fn param_set_from_host(&self, id: u32, value: f64) {

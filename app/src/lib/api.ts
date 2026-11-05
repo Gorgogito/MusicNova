@@ -71,6 +71,8 @@ export interface PluginParam {
   default: number
   value: number
   stepped: boolean
+  /** Pasos entre min y max si es escalonado (0: continuo). */
+  steps: number
   text: string
 }
 
@@ -619,6 +621,7 @@ export const api = {
   pluginOpenEditor: (slotId: string) => invoke<void>('plugin_open_editor', { slotId }),
   pluginParams: (slotId: string) => invoke<PluginParam[]>('plugin_params', { slotId }),
   pluginParamSet: (slotId: string, id: number, value: number) => invoke<void>('plugin_param_set', { slotId, id, value }),
+  pluginParamParse: (slotId: string, id: number, text: string) => invoke<number | null>('plugin_param_parse', { slotId, id, text }),
   pluginRestart: (slotId: string) => invoke<void>('plugin_restart', { slotId }),
   updateCheck: () => invoke<UpdateInfo | null>('update_check'),
   updateInstall: () => invoke<void>('update_install'),

@@ -51,6 +51,8 @@ import type { MasterJob } from '../lib/useMasterReference'
 import { usePref } from '../lib/prefs'
 import type { Notation } from '../lib/chords'
 import { tr, plural } from '../i18n'
+import { ParamControl } from '../components/ParamControl'
+import { PAN_SPEC, VOLUME_SPEC } from '../lib/param'
 
 interface Props {
   project: ProjectView
@@ -554,6 +556,10 @@ export function StudioView({
     commitEdit(edit)
   }, [project.tracks, selected, position, commitEdit])
 
+  const hasLoop = practice.loop_end > practice.loop_start
+  /** Quita el bucle A-B: vuelve a sonar la canción entera. */
+  const clearLoop = useCallback(() => onPracticeChange({ loop_enabled: false, loop_start: 0, loop_end: 0 }), [onPracticeChange])
+
   const deleteSelected = useCallback(() => {
     if (!selected) return
     const t = project.tracks.find((x) => x.id === selected.trackId)
@@ -580,12 +586,14 @@ export function StudioView({
         e.preventDefault()
         deleteSelected()
       } else if (!mod && e.code === 'Escape') {
-        setSelected(null)
+        // Primero se suelta el clip seleccionado; si no hay, se quita el bucle.
+        if (selected) setSelected(null)
+        else if (hasLoop) clearLoop()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo, splitAtPlayhead, deleteSelected, recording])
+  }, [undo, redo, splitAtPlayhead, deleteSelected, recording, selected, hasLoop, clearLoop])
 
   const timeAt = (clientX: number): number | null => {
     const el = lanesRef.current
@@ -927,9 +935,34 @@ export function StudioView({
         ref={lanesRef}
         style={{ ['--header-w' as string]: `${HEADER_W}px`, width: `${HEADER_W + laneW}px`, minWidth: '100%' }}
       >
-        <div className="ruler" onMouseDown={onRulerDown}>
+        <div
+          className="ruler"
+          onMouseDown={onRulerDown}
+          onDoubleClick={(e) => {
+            // Doble clic dentro del bucle lo quita.
+            const at = timeAt(e.clientX)
+            if (at != null && hasLoop && at >= practice.loop_start && at <= practice.loop_end) clearLoop()
+          }}
+        >
           <div className="ruler-spacer" />
           <div className="ruler-track">
+            {loopView && !dragLoop && (
+              <div
+                className={`ruler-loop ${loopView.on ? 'on' : ''}`}
+                style={{ left: `${(loopView.a / duration) * 100}%`, width: `${((loopView.b - loopView.a) / duration) * 100}%` }}
+              >
+                <button
+                  className="ruler-loop-clear"
+                  title={tr('Quitar el bucle (Esc o doble clic en la regla)')}
+                  aria-label={tr('Quitar el bucle')}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onClick={clearLoop}
+                >
+                  ×
+                </button>
+              </div>
+            )}
             {ticks.map((s) => (
               <span key={s} className="tick" style={{ left: `${(s / duration) * 100}%` }}>
                 {tickStep < 1 ? formatTime(s) : formatTime(s).slice(0, -3)}
@@ -1018,42 +1051,34 @@ export function StudioView({
                     </button>
                   )}
                 </div>
-                <label
+                <div
                   className={`lane-slider ${volAuto ? 'automated' : ''}`}
-                  title={volAuto ? tr('Volumen controlado por la automatización') : tr('Volumen: {db} dB (doble clic: 0 dB)', { db: t.gain_db.toFixed(1) })}
+                  title={volAuto ? tr('Volumen controlado por la automatización') : tr('Volumen (doble clic: 0 dB)')}
                 >
                   <span className="small muted">{tr('Vol')}</span>
-                  <input
+                  <ParamControl
+                    compact
+                    spec={VOLUME_SPEC}
                     disabled={volAuto}
-                    type="range"
-                    min={-60}
-                    max={12}
-                    step={0.5}
+                    label={tr('Volumen')}
                     value={t.gain_db}
-                    onChange={(e) => update(t, { gain_db: Number(e.target.value) })}
-                    onDoubleClick={() => update(t, { gain_db: 0 })}
+                    onChange={(v) => update(t, { gain_db: v })}
                   />
-                  <span className="small mono">{t.gain_db <= -60 ? '-∞' : t.gain_db.toFixed(1)}</span>
-                </label>
-                <label
+                </div>
+                <div
                   className={`lane-slider ${panAuto ? 'automated' : ''}`}
                   title={panAuto ? tr('Panorama controlado por la automatización') : tr('Panorama (doble clic: centro)')}
                 >
                   <span className="small muted">{tr('Pan')}</span>
-                  <input
+                  <ParamControl
+                    compact
+                    spec={PAN_SPEC}
                     disabled={panAuto}
-                    type="range"
-                    min={-1}
-                    max={1}
-                    step={0.02}
+                    label={tr('Panorama')}
                     value={t.pan}
-                    onChange={(e) => update(t, { pan: Number(e.target.value) })}
-                    onDoubleClick={() => update(t, { pan: 0 })}
+                    onChange={(v) => update(t, { pan: v })}
                   />
-                  <span className="small mono">
-                    {Math.abs(t.pan) < 0.01 ? 'C' : `${t.pan < 0 ? 'I' : 'D'}${Math.round(Math.abs(t.pan) * 100)}`}
-                  </span>
-                </label>
+                </div>
               </div>
               <ClipLane
                 track={t}
@@ -1150,7 +1175,7 @@ export function StudioView({
       </div>
 
       <p className="hint muted small">
-        {tr('Clic: saltar a esa posición. Arrastra un clip para moverlo, sus bordes para recortarlo y los tiradores de arriba para los fundidos. S divide en el cabezal, Supr borra el clip, Ctrl+Z deshace. Alt desactiva el ajuste a pulsos.')}
+        {tr('Clic: saltar a esa posición. Arrastra un clip para moverlo, sus bordes para recortarlo y los tiradores de arriba para los fundidos. S divide en el cabezal, Supr borra el clip, Ctrl+Z deshace. Alt desactiva el ajuste a pulsos. Arrastra sobre la regla para crear un bucle; × o Esc lo quita.')}
       </p>
     </section>
   )

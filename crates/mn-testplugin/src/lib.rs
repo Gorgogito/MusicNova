@@ -390,8 +390,24 @@ unsafe extern "C" fn params_value_to_text(_p: *const clap_plugin, id: clap_id, v
     copy_name(std::slice::from_raw_parts_mut(buf, cap as usize), &text);
     true
 }
-unsafe extern "C" fn params_text_to_value(_p: *const clap_plugin, _id: clap_id, _t: *const c_char, _v: *mut f64) -> bool {
-    false
+unsafe extern "C" fn params_text_to_value(_p: *const clap_plugin, id: clap_id, t: *const c_char, v: *mut f64) -> bool {
+    let text = std::ffi::CStr::from_ptr(t).to_string_lossy().trim().to_lowercase();
+    let value = match id {
+        PARAM_GAIN => text.trim_end_matches("db").trim().replace(',', ".").parse::<f64>().ok().map(|x| x.clamp(-60.0, 12.0)),
+        PARAM_INVERT => match text.as_str() {
+            "sí" | "si" | "1" => Some(1.0),
+            "no" | "0" => Some(0.0),
+            _ => None,
+        },
+        _ => None,
+    };
+    match value {
+        Some(x) => {
+            *v = x;
+            true
+        }
+        None => false,
+    }
 }
 unsafe extern "C" fn params_flush(p: *const clap_plugin, input: *const clap_input_events, _out: *const clap_output_events) {
     Plugin::from(p).read_events(input);

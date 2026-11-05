@@ -160,6 +160,7 @@ pub(crate) enum Request {
     Load { plugin: PluginRef, sample_rate: u32, shm: String, ev_req: String, ev_done: String },
     Params,
     SetParam { id: u32, value: f64 },
+    ParamFromText { id: u32, text: String },
     SaveState,
     LoadState { data: String },
     OpenEditor,
@@ -174,6 +175,7 @@ pub(crate) enum Reply {
     Params(Vec<ParamInfo>),
     State(Option<String>),
     Bool(bool),
+    Value(Option<f64>),
     Done,
 }
 

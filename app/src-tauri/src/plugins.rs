@@ -196,6 +196,13 @@ pub fn plugin_param_set(slot_id: String, id: u32, value: f64) -> Result<(), Stri
     Ok(())
 }
 
+/// Valor de un parámetro a partir del texto que escribió el usuario («-6 dB»),
+/// según el propio plugin. `None` si no lo entiende.
+#[tauri::command]
+pub fn plugin_param_parse(slot_id: String, id: u32, text: String) -> Result<Option<f64>, String> {
+    Ok(live(&slot_id)?.param_from_text(id, &text))
+}
+
 /// Guarda en el proyecto el estado actual de todos sus plugins.
 #[tauri::command]
 pub fn plugins_sync(state: State<'_, AppState>) -> Result<(), String> {
