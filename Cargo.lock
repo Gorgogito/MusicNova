@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "mn-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "flacenc",
@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "mn-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cpal",
  "mn-core",
@@ -2386,7 +2386,7 @@ dependencies = [
 
 [[package]]
 name = "mn-fx"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "mn-plugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "clap-sys",
@@ -2411,14 +2411,14 @@ dependencies = [
 
 [[package]]
 name = "mn-stretch"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "mn-testplugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap-sys",
  "vst3",
@@ -2474,7 +2474,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "musicnova"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "mn-core",
